@@ -1,0 +1,43 @@
+version: '3.9'
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - DATABASE_URL=postgresql://mlbuilder:password@postgres:5432/mlbuilder_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=prod_ready_secret_key_mlbuilder_2026_super_secure
+      - JWT_ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - GRAPHQL_DEBUG=true
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: mlbuilder_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mlbuilder
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mlbuilder_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: mlbuilder_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
