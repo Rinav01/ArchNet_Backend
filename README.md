@@ -1,8 +1,96 @@
 # MLBuilder Backend - Production-Ready API Server
 
+<p align="center">
+  <img src="./assets/mlbuilder-hero.png" width="100%" alt="MLBuilder Hero Banner" />
+</p>
+
+<h1 align="center">MLBuilder</h1>
+
+<p align="center">
+  <strong>Visual Neural Architecture IDE</strong>
+</p>
+
+<p align="center">
+  Build • Validate • Benchmark • Train • Collaborate
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/tests-64%20passed-success?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/FastAPI-0.110+-009688?style=for-the-badge&logo=fastapi" />
+  <img src="https://img.shields.io/badge/GraphQL-Strawberry-E10098?style=for-the-badge&logo=graphql" />
+  <img src="https://img.shields.io/badge/Docker-ready-2496ED?style=for-the-badge&logo=docker" />
+  <img src="https://img.shields.io/badge/Redis-PubSub-red?style=for-the-badge&logo=redis" />
+  <img src="https://img.shields.io/badge/Vertex%20AI-enabled-4285F4?style=for-the-badge&logo=googlecloud" />
+</p>
+
+---
+
+## ✨ Platform Overview
+
+MLBuilder is a graph-native AI infrastructure platform that combines:
+
+- visual neural architecture engineering,
+- deterministic DAG execution,
+- symbolic tensor propagation,
+- CRDT-powered collaboration,
+- sandboxed benchmarking,
+- AutoML diagnostics,
+- and cloud-scale Vertex AI orchestration.
+
+Unlike traditional code-first ML tooling, MLBuilder introduces a fully interactive computational graph IDE capable of compiling visual architectures directly into executable deep learning frameworks.
+
 MLBuilder is a visual machine learning architecture designer that enables developers to build, validate, benchmark, and compile deep learning models directly from an interactive web canvas. 
 
 This repository houses the production-grade, asynchronous FastAPI backend. It coordinates user authentication, real-time collaboration sessions, graph-based canvas CRUD operations, Directed Acyclic Graph (DAG) validation, shape inference calculations, process-sandboxed model benchmarking, AutoML structural advisors, GCS storage ingestion, and serverless GCP Vertex AI training pipelines.
+
+# ⚡ Core Platform Capabilities
+
+| Capability | Status | Description |
+|---|---|---|
+| DAG Validation | ✅ | Deterministic topological graph validation |
+| Shape Inference | ✅ | Multi-dimensional symbolic tensor propagation |
+| PyTorch Compilation | ✅ | IRGraph → executable PyTorch generation |
+| TensorFlow Compilation | 🚧 | Multi-framework compiler pipeline |
+| CRDT Collaboration | ✅ | Real-time collaborative graph editing |
+| Redis Synchronization | ✅ | Distributed Pub/Sub event orchestration |
+| Sandbox Benchmarking | ✅ | Isolated subprocess performance execution |
+| AutoML Diagnostics | ✅ | AI structural anti-pattern detection |
+| Vertex AI Training | ✅ | Cloud-scale serverless GPU training |
+| RBAC Security | ✅ | Enterprise-grade permission boundaries |
+| Audit Logging | ✅ | Transactional event trace persistence |
+| Dataset Ingestion | ✅ | CSV / ZIP / tensor dataset processing |
+| WebSocket Collaboration | ✅ | Real-time synchronized editing sessions |
+| Dockerized Infrastructure | ✅ | Fully containerized deployment stack |
+| Benchmark Metrics | ✅ | FLOPs, latency, throughput, VRAM |
+
+# 🌌 Why MLBuilder Exists
+
+Modern deep learning tooling remains heavily code-centric, difficult to visualize, and fragmented across disconnected ecosystems.
+
+Developers frequently struggle with:
+
+- debugging tensor dimensionality mismatches,
+- understanding computational graph flow,
+- validating complex architectures,
+- benchmarking safely,
+- orchestrating cloud training,
+- and collaborating visually on large neural systems.
+
+MLBuilder was engineered to solve these problems by introducing a graph-native AI systems IDE capable of:
+
+- deterministic graph execution,
+- live tensor propagation,
+- compiler-grade architecture validation,
+- distributed collaboration,
+- cloud orchestration,
+- and framework-level code generation.
+
+The platform merges concepts from:
+
+- visual programming systems,
+- compiler pipelines,
+- ML infrastructure tooling,
+- and distributed collaborative editors.
 
 ---
 
@@ -10,10 +98,41 @@ This repository houses the production-grade, asynchronous FastAPI backend. It co
 
 The backend is built using a highly decoupled, layered architecture to isolate presentation, business logic, asynchronous tasks, external cloud adapters, and secure subprocess sandboxes.
 
+# 🧠 Core Engineering Innovations
+
+| Innovation | Why It Matters |
+|---|---|
+| Deterministic DAG Execution | Prevents cyclic architectures and guarantees execution ordering |
+| Symbolic Shape Inference | Eliminates invalid tensor dimension propagation |
+| IRGraph Compiler Pipeline | Enables framework abstraction and reusable compilation logic |
+| CRDT Synchronization | Allows concurrent multi-user graph editing without lock contention |
+| Sandbox Benchmarking | Executes compiled models safely in isolated subprocesses |
+| Vertex AI Integration | Enables scalable cloud GPU orchestration |
+| AutoML Structural Diagnostics | Detects parameter explosions and architectural anti-patterns |
+| Redis Pub/Sub Presence Layer | Synchronizes live collaborative editing sessions |
+| RBAC + Audit Logging | Provides enterprise-grade security and operational traceability |
+
+
+# 🏗️ High-Level Platform Flow
+
+```text
+Frontend Canvas IDE
+        ↓
+GraphQL API Layer
+        ↓
+Validation Engine
+        ↓
+Shape Inference Engine
+        ↓
+IRGraph Compiler
+        ↓
+Sandbox Benchmarking / Vertex AI Training
+```
+
 ### 1. Global Decoupled Data Flow
 ```mermaid
 graph TD
-    UserClient["Web Canvas Client"] <-->|GraphQL HTTP & Starlette WebSocket| FastAPI["FastAPI Web Server"]
+    UserClient["Web Canvas Client"] --- |"GraphQL HTTP & Starlette WebSocket"| FastAPI["FastAPI Web Server"]
     
     subgraph FastAPI Application
         Auth["Auth & JWT Security Layer"] --> context["GraphQL Context"]
@@ -42,9 +161,9 @@ graph TD
         project_service -->|3. GCP Custom Jobs| VertexAI["Google Cloud Vertex AI"]
     end
     
-    FastAPI <-->|SQLAlchemy ORM (Async)| DB[("Database SQLite / PostgreSQL")]
-    FastAPI <-->|Redis Pub/Sub & Presence Map| Redis[("Redis Broker & Cache")]
-    Celery <-->|State Store| Redis
+    FastAPI --- |"SQLAlchemy ORM (Async)"| DB["Database: SQLite / PostgreSQL"]
+    FastAPI --- |"Redis Pub/Sub & Presence Map"| Redis["Redis Broker & Cache"]
+    Celery --- |"State Store"| Redis
     VertexAI -->|Webhook Progressive Metrics| FastAPI
 ```
 
@@ -491,6 +610,8 @@ sequenceDiagram
     API->>DB: Update status = "COMPLETED" and save weights paths
     API->>Redis: Publish training completion event
 ```
+
+
 
 ---
 
