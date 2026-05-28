@@ -1,2 +1,44 @@
-.env
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 tests/
+# C extensions
+*.so
+
+# Unit test / coverage reports
+.pytest_cache/
+.mypy_cache/
+.cache/
+coverage.xml
+*.cover
+htmlcov/
+
+# Environments & Private credentials
+.env
+.env.local
+.env.*.local
+.venv
+env/
+venv/
+ENV/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Local storage and scratch files
+scratch/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo

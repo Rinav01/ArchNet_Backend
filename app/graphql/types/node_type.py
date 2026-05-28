@@ -16,6 +16,32 @@ class NodeType:
     created_at: datetime
     updated_at: datetime
 
+    @strawberry.field
+    def parameter_count(self) -> int:
+        from app.services.memory_estimator import MemoryEstimator
+        from app.models.node import Node
+        # Cast self to Node model structure
+        metrics = MemoryEstimator.estimate_node_metrics(self)
+        return metrics["parameter_count"]
+
+    @strawberry.field
+    def parameter_memory_mb(self) -> float:
+        from app.services.memory_estimator import MemoryEstimator
+        metrics = MemoryEstimator.estimate_node_metrics(self)
+        return metrics["parameter_memory_mb"]
+
+    @strawberry.field
+    def activation_memory_mb(self) -> float:
+        from app.services.memory_estimator import MemoryEstimator
+        metrics = MemoryEstimator.estimate_node_metrics(self)
+        return metrics["activation_memory_mb"]
+
+    @strawberry.field
+    def flops(self) -> float:
+        from app.services.memory_estimator import MemoryEstimator
+        metrics = MemoryEstimator.estimate_node_metrics(self)
+        return metrics["flops"]
+
 @strawberry.input
 class PositionInput:
     x: float

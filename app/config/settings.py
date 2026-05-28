@@ -17,7 +17,13 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_BUCKET_NAME: str = ""
     
+    # GCP Storage & Vertex AI Configuration (Optional)
+    GCP_PROJECT_ID: str = ""
+    GCP_BUCKET_NAME: str = ""
+    GCP_CREDENTIALS_JSON: str = ""
+    
     GRAPHQL_DEBUG: bool = True
+
 
     model_config = ConfigDict(
         env_file=".env",

@@ -1,3 +1,5 @@
+import uuid
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.models.user import User
 from app.auth.security import hash_password, verify_password, create_access_token
@@ -6,7 +8,6 @@ class AuthService:
     @staticmethod
     def signup(db: Session, email: str, username: str, password: str) -> User:
         """Create a new user account if the email and username are unique."""
-        # Clean inputs
         email = email.strip().lower()
         username = username.strip()
 
@@ -34,9 +35,26 @@ class AuthService:
         db.refresh(new_user)
         return new_user
 
-    @staticmethod
-    def login(db: Session, email: str, password: str) -> tuple[str, User]:
-        """Authenticate a user by email and password, returning a JWT token and user instance."""
+    @classmethod
+    def generate_tokens(cls, db: Session, user: User) -> tuple[str, str]:
+        """Generates a short-lived access token and a secure long-lived refresh token,
+        persisting the rotated refresh token on the user's database record.
+        """
+        access_token = create_access_token(user_id=str(user.id), email=user.email)
+        
+        # Secure unique hex string for rotated token
+        refresh_token = uuid.uuid4().hex + uuid.uuid4().hex
+        expiry = datetime.utcnow() + timedelta(days=7)
+        
+        user.refresh_token = refresh_token
+        user.refresh_token_expires_at = expiry
+        db.commit()
+        
+        return access_token, refresh_token
+
+    @classmethod
+    def login(cls, db: Session, email: str, password: str) -> tuple[str, str, User]:
+        """Authenticate a user by email and password, returning an access token, refresh token, and user instance."""
         email = email.strip().lower()
         
         user = db.query(User).filter(User.email == email).first()
@@ -46,5 +64,24 @@ class AuthService:
         if not verify_password(password, user.password_hash):
             raise ValueError("Invalid email or password.")
             
-        token = create_access_token(user_id=str(user.id), email=user.email)
-        return token, user
+        access_token, refresh_token = cls.generate_tokens(db, user)
+        return access_token, refresh_token, user
+
+    @classmethod
+    def rotate_refresh_token(cls, db: Session, refresh_token: str) -> tuple[str, str, User]:
+        """Performs single-use refresh token rotation, invalidating the old token immediately
+        and generating a fresh pair of access and refresh tokens.
+        """
+        user = db.query(User).filter(User.refresh_token == refresh_token).first()
+        if not user:
+            raise ValueError("Invalid or revoked refresh token.")
+            
+        if user.refresh_token_expires_at and user.refresh_token_expires_at < datetime.utcnow():
+            user.refresh_token = None
+            user.refresh_token_expires_at = None
+            db.commit()
+            raise ValueError("Refresh token has expired.")
+            
+        # Single-use revocation & fresh tokens issuance
+        access_token, new_refresh_token = cls.generate_tokens(db, user)
+        return access_token, new_refresh_token, user

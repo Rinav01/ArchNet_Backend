@@ -1,0 +1,43 @@
+import tensorflow as tf
+from tensorflow.keras import layers, Model
+
+def create_model():
+    """
+    Generated Keras Functional API Model from MLBuilder Architecture Canvas.
+    Name: {{ project_name }}
+    Framework: {{ framework }}
+    """
+    # 1. Define Input Layer
+    {{ input_variable }} = layers.Input(shape={{ input_shape_sans_batch }}, name="{{ input_name }}")
+    
+    # 2. Define Network Architecture Layers
+    {%- for step in layers_steps %}
+    {{ step.output_var }} = {{ step.keras_definition }}({{ step.input_vars }})  # shape: {{ step.shape }}
+    {%- if step.activation %}
+    {{ step.output_var }} = layers.Activation('{{ step.activation }}')({{ step.output_var }})
+    {%- endif %}
+    {%- endfor %}
+    
+    # 3. Assemble Model
+    model = Model(inputs={{ input_variable }}, outputs={{ output_variable }}, name="{{ project_clean_name }}")
+    return model
+
+if __name__ == "__main__":
+    # Instantiate and print model summary
+    model = create_model()
+    print("Model Architecture Summary:")
+    model.summary()
+    
+    # Verify execution with a dummy input
+    {% if test_input_dims %}
+    print("\nVerifying forward execution pass...")
+    dummy_input = tf.random.normal({{ test_input_dims }})
+    try:
+        output = model(dummy_input)
+        print("Forward pass completed successfully!")
+        print("Output tensor shape:", output.shape)
+    except Exception as e:
+        print("Error during execution pass verification:", e)
+    {% else %}
+    print("Could not verify forward pass: input shape unknown.")
+    {% endif %}

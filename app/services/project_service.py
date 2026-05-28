@@ -74,6 +74,11 @@ class ProjectService:
         db.add(new_node)
         db.commit()
         db.refresh(new_node)
+
+        # Dispatch real-time canvas event
+        from app.services.event_dispatcher import EventDispatcher
+        EventDispatcher.dispatch_node_added(project_id, new_node.id, new_node.label, new_node.type)
+
         return new_node
 
     @staticmethod
@@ -120,6 +125,11 @@ class ProjectService:
             
         db.delete(node)
         db.commit()
+
+        # Dispatch real-time canvas event
+        from app.services.event_dispatcher import EventDispatcher
+        EventDispatcher.dispatch_node_deleted(project_id, node_id)
+
         return True
 
     @staticmethod

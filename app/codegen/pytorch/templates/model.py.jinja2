@@ -18,16 +18,17 @@ class MLBuilderModel(nn.Module):
 
     def forward(self, x):
         # x shape: {{ input_shape_comment }}
+        x_input = x
         
         # Forward execution flow
         {%- for step in forward_steps %}
-        x = self.{{ step.name }}(x)  # shape: {{ step.shape }}
+        {{ step.custom_forward }}  # shape: {{ step.shape }}
         {%- if step.activation %}
-        x = {{ step.activation }}(x)
+        {{ step.name }} = {{ step.activation }}({{ step.name }})
         {%- endif %}
         {%- endfor %}
         
-        return x
+        return {{ forward_steps[-1].name if forward_steps else 'x' }}
 
 if __name__ == "__main__":
     # Example Model Instantiation & Test Forward Pass
@@ -37,6 +38,11 @@ if __name__ == "__main__":
     # Generate dummy input matching shape {{ input_shape_test }}
     {% if test_input_dims %}
     dummy_input = torch.randn({{ test_input_dims }})
+    # If the input type requires integers (e.g. Embedding layer takes integer token indexes)
+    # we convert dummy input to long tensor.
+    if dummy_input.ndim == 2:
+        dummy_input = dummy_input.long().abs() % 100
+        
     try:
         output = model(dummy_input)
         print("Forward pass successful!")

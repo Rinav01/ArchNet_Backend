@@ -13,6 +13,11 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    role: Mapped[str] = mapped_column(String(50), default="editor", server_default="editor")
+    
+    # Token Rotation Columns
+    refresh_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    refresh_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

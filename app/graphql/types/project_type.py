@@ -53,3 +53,43 @@ class ProjectType:
                 created_at=e.created_at
             ) for e in db_edges
         ]
+
+    @strawberry.field
+    def total_parameter_count(self, info) -> int:
+        db = info.context.db
+        from app.models.node import Node
+        nodes = db.query(Node).filter(Node.project_id == self.id).all()
+        from app.services.memory_estimator import MemoryEstimator
+        return MemoryEstimator.estimate_project_metrics(nodes)["total_parameter_count"]
+
+    @strawberry.field
+    def total_parameter_memory_mb(self, info) -> float:
+        db = info.context.db
+        from app.models.node import Node
+        nodes = db.query(Node).filter(Node.project_id == self.id).all()
+        from app.services.memory_estimator import MemoryEstimator
+        return MemoryEstimator.estimate_project_metrics(nodes)["total_parameter_memory_mb"]
+
+    @strawberry.field
+    def total_activation_memory_mb(self, info) -> float:
+        db = info.context.db
+        from app.models.node import Node
+        nodes = db.query(Node).filter(Node.project_id == self.id).all()
+        from app.services.memory_estimator import MemoryEstimator
+        return MemoryEstimator.estimate_project_metrics(nodes)["total_activation_memory_mb"]
+
+    @strawberry.field
+    def total_flops(self, info) -> float:
+        db = info.context.db
+        from app.models.node import Node
+        nodes = db.query(Node).filter(Node.project_id == self.id).all()
+        from app.services.memory_estimator import MemoryEstimator
+        return MemoryEstimator.estimate_project_metrics(nodes)["total_flops"]
+
+    @strawberry.field
+    def estimated_gpu_memory_mb(self, info) -> float:
+        db = info.context.db
+        from app.models.node import Node
+        nodes = db.query(Node).filter(Node.project_id == self.id).all()
+        from app.services.memory_estimator import MemoryEstimator
+        return MemoryEstimator.estimate_project_metrics(nodes)["estimated_gpu_memory_mb"]

@@ -36,15 +36,18 @@ def get_current_user(
     return user
 
 class GraphQLContext(BaseContext):
-    """Custom context class for Strawberry GraphQL holding db and current user."""
-    def __init__(self, db: Session, current_user: User | None):
+    """Custom context class for Strawberry GraphQL holding db, current user, and client IP."""
+    def __init__(self, db: Session, current_user: User | None, ip_address: str | None = None):
         super().__init__()
         self.db = db
         self.current_user = current_user
+        self.ip_address = ip_address
 
 def get_graphql_context(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user)
 ) -> GraphQLContext:
     """FastAPI dependency to assemble the Strawberry GraphQL execution context."""
-    return GraphQLContext(db=db, current_user=current_user)
+    ip_address = request.client.host if request and request.client else None
+    return GraphQLContext(db=db, current_user=current_user, ip_address=ip_address)

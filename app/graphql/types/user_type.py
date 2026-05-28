@@ -8,5 +8,6 @@ class UserType:
     email: str
     username: str
     preferences: strawberry.scalars.JSON
+    role: str
     created_at: datetime
     updated_at: datetime
