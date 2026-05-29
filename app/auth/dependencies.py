@@ -14,9 +14,24 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
     db: Session = Depends(get_db)
 ) -> User | None:
-    """FastAPI dependency to retrieve the current user from the Bearer token."""
+    """FastAPI dependency to retrieve the current user from the Bearer token.
+    Automatically authenticates a default developer user in local development mode.
+    """
     if not credentials:
-        return None
+        # Auto-authenticate default developer user in local development mode
+        dev_user = db.query(User).filter(User.username == "developer").first()
+        if not dev_user:
+            dev_user = User(
+                id=uuid.uuid4(),
+                email="developer@mlbuilder.local",
+                username="developer",
+                password_hash="dev_hash",
+                role="admin"  # Admin role gives full developer capabilities
+            )
+            db.add(dev_user)
+            db.commit()
+            db.refresh(dev_user)
+        return dev_user
     
     token = credentials.credentials
     payload = decode_access_token(token)

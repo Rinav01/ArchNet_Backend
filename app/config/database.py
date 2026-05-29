@@ -1,6 +1,10 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, JSON
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from app.config.settings import settings
+
+# SQLite compatibility monkeypatch for PostgreSQL-specific JSONB type
+import sqlalchemy.dialects.postgresql as pg
+pg.JSONB = JSON
 
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy database models"""
