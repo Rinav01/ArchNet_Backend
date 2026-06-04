@@ -224,14 +224,14 @@ class ShapeInferenceService:
             return [batch_size, multiplier]
 
         elif node_type in ("dense", "linear"):
-            if len(first_input) != 2:
+            if len(first_input) < 2:
                 raise ValueError(
-                    f"Dense/Linear layer '{node.label}' requires 2D input [Batch, Features]. "
+                    f"Dense/Linear layer '{node.label}' requires input rank >= 2. "
                     f"Received shape: {first_input}."
                 )
             
             units = int(config.get("units") or config.get("out_features", 10))
-            return [batch_size, units]
+            return list(first_input[:-1]) + [units]
 
         elif node_type in ("batchnorm", "batchnorm2d", "layernorm", "positional_encoding"):
             return first_input
@@ -273,9 +273,20 @@ class ShapeInferenceService:
         elif node_type in ("multiheadattention", "mha"):
             if len(first_input) != 3:
                 raise ValueError(f"Attention layer '{node.label}' requires 3D inputs. Received shape: {first_input}")
+            
+            # Resolve custom embed_dim / key_dim / embedding_dim from config
+            embed_dim = config.get("embed_dim") or config.get("key_dim") or config.get("embedding_dim")
+            if embed_dim is not None:
+                try:
+                    embed_dim = int(embed_dim)
+                except ValueError:
+                    embed_dim = None
+            
+            if embed_dim is not None:
+                return [first_input[0], first_input[1], embed_dim]
             return first_input
 
-        elif node_type in ("add", "multiply"):
+        elif node_type in ("add", "multiply", "subtract", "maximum", "minimum"):
             if len(input_shapes) < 2:
                 raise ValueError(f"Operation layer '{node.label}' requires at least 2 incoming connections. Received {len(input_shapes)}")
                 

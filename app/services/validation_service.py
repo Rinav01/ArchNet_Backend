@@ -124,6 +124,30 @@ class ValidationService:
             input_shape = node.input_shape
             parents = incoming_edges[node.id]
             
+            # 0. Incoming Connection Counts Validation
+            if edges:
+                parent_count = len(parents)
+                if node_type in ("add", "multiply", "subtract", "maximum", "minimum", "concatenate"):
+                    if parent_count < 2:
+                        errors.append(
+                            f"Merge layer '{node.label}' ({node.type}) requires at least 2 incoming connections. "
+                            f"Received: {parent_count}."
+                        )
+                elif node_type in ("multiheadattention", "mha"):
+                    if parent_count < 1 or parent_count > 3:
+                        errors.append(
+                            f"Attention layer '{node.label}' ({node.type}) requires between 1 and 3 incoming connections. "
+                            f"Received: {parent_count}."
+                        )
+                elif node_type != "input":
+                    # Single-input layers
+                    if parent_count != 1:
+                        errors.append(
+                            f"Layer '{node.label}' ({node.type}) requires exactly 1 incoming connection. "
+                            f"Received: {parent_count}. If you want to connect multiple branches, "
+                            f"use a merge layer (like 'Add' or 'Concatenate') first."
+                        )
+            
             # Helper to get preceding shapes
             parent_shapes = []
             for p in parents:
@@ -144,9 +168,9 @@ class ValidationService:
                             f"Received shape: {input_shape} (Rank {rank})."
                         )
                 elif node_type in ("dense", "linear"):
-                    if rank != 2:
+                    if rank < 2:
                         errors.append(
-                            f"Layer '{node.label}' ({node.type}) requires a 2D input tensor [Batch, Features]. "
+                            f"Layer '{node.label}' ({node.type}) requires input tensor with rank >= 2. "
                             f"Received shape: {input_shape} (Rank {rank})."
                         )
                 elif node_type in ("lstm", "gru", "rnn", "bidirectional", "multiheadattention", "mha"):
@@ -164,9 +188,16 @@ class ValidationService:
 
             # 2. Multi-Head Attention Head Divisibility
             if node_type in ("multiheadattention", "mha"):
-                embed_dim = None
-                if input_shape and len(input_shape) == 3:
-                    embed_dim = input_shape[2]
+                embed_dim = config.get("embed_dim") or config.get("key_dim") or config.get("embedding_dim")
+                if embed_dim is not None:
+                    try:
+                        embed_dim = int(embed_dim)
+                    except ValueError:
+                        embed_dim = None
+                if embed_dim is None:
+                    q_shape = input_shape[0] if isinstance(input_shape[0], list) else input_shape
+                    if q_shape and len(q_shape) == 3:
+                        embed_dim = q_shape[2]
                 
                 num_heads = int(config.get("num_heads", 8))
                 if embed_dim is not None and num_heads > 0:

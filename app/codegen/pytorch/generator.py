@@ -84,6 +84,12 @@ class PyTorchCompiler(BaseCompiler):
                     test_dims = [dim if dim is not None else 1 for dim in shape]
                     input_shape_test = str(test_dims)
                     test_input_dims = ", ".join(map(str, test_dims))
+                forward_steps.append({
+                    "name": var_name,
+                    "custom_forward": f"{var_name} = x",
+                    "shape": str(node.output_shape),
+                    "activation": None
+                })
                 continue
 
             params = node.params or {}
@@ -142,7 +148,7 @@ class PyTorchCompiler(BaseCompiler):
                 init_str = "nn.Flatten(start_dim=1)"
 
             elif op_type in ("dense", "linear"):
-                in_features = node.input_shape[1] if node.input_shape else 10
+                in_features = node.input_shape[-1] if node.input_shape else 10
                 units = int(params.get("units") or params.get("out_features", 10))
 
                 init_str = f"nn.Linear(in_features={in_features}, out_features={units})"
@@ -187,12 +193,23 @@ class PyTorchCompiler(BaseCompiler):
                 init_str = f"nn.LayerNorm(normalized_shape={normalized_shape})"
 
             elif op_type in ("multiheadattention", "mha"):
-                embed_dim = node.input_shape[2] if node.input_shape else 128
+                # Resolve embed_dim from config or query input shape
+                embed_dim = params.get("embed_dim") or params.get("key_dim") or params.get("embedding_dim")
+                if embed_dim is not None:
+                    embed_dim = int(embed_dim)
+                else:
+                    q_shape = node.input_shape[0] if node.input_shape and isinstance(node.input_shape[0], list) else node.input_shape
+                    embed_dim = q_shape[2] if q_shape and len(q_shape) > 2 else 128
                 num_heads = int(params.get("num_heads", 8))
                 init_str = f"nn.MultiheadAttention(embed_dim={embed_dim}, num_heads={num_heads}, batch_first=True)"
                 # MultiheadAttention requires Query, Key, Value inputs and returns output, weights.
-                # Default self-attention: Query = Key = Value = parent_node
-                custom_forward = f"{var_name}, _ = self.{var_name}({input_arg}, {input_arg}, {input_arg})"
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) == 3:
+                    custom_forward = f"{var_name}, _ = self.{var_name}({parents[0]}, {parents[1]}, {parents[2]})"
+                elif len(parents) == 2:
+                    custom_forward = f"{var_name}, _ = self.{var_name}({parents[0]}, {parents[1]}, {parents[1]})"
+                else:
+                    custom_forward = f"{var_name}, _ = self.{var_name}({input_arg}, {input_arg}, {input_arg})"
 
             # Tensor Operations (No init definitions, custom forward steps)
             elif op_type == "add":
@@ -200,6 +217,37 @@ class PyTorchCompiler(BaseCompiler):
                 parents_vars = [node_vars[pid] for pid in node.inputs]
                 sum_arg = " + ".join(parents_vars)
                 custom_forward = f"{var_name} = {sum_arg}"
+
+            elif op_type == "subtract":
+                is_tensor_op = True
+                parents_vars = [node_vars[pid] for pid in node.inputs]
+                if len(parents_vars) >= 2:
+                    sub_arg = " - ".join(parents_vars)
+                    custom_forward = f"{var_name} = {sub_arg}"
+                else:
+                    custom_forward = f"{var_name} = {input_arg}"
+
+            elif op_type == "maximum":
+                is_tensor_op = True
+                parents_vars = [node_vars[pid] for pid in node.inputs]
+                if len(parents_vars) >= 2:
+                    cur = parents_vars[0]
+                    for other in parents_vars[1:]:
+                        cur = f"torch.maximum({cur}, {other})"
+                    custom_forward = f"{var_name} = {cur}"
+                else:
+                    custom_forward = f"{var_name} = {input_arg}"
+
+            elif op_type == "minimum":
+                is_tensor_op = True
+                parents_vars = [node_vars[pid] for pid in node.inputs]
+                if len(parents_vars) >= 2:
+                    cur = parents_vars[0]
+                    for other in parents_vars[1:]:
+                        cur = f"torch.minimum({cur}, {other})"
+                    custom_forward = f"{var_name} = {cur}"
+                else:
+                    custom_forward = f"{var_name} = {input_arg}"
 
             elif op_type == "multiply":
                 is_tensor_op = True
@@ -321,6 +369,12 @@ class PyTorchCompiler(BaseCompiler):
                     test_dims = [dim if dim is not None else 1 for dim in shape]
                     input_shape_test = str(test_dims)
                     test_input_dims = ", ".join(map(str, test_dims))
+                forward_steps.append({
+                    "name": var_name,
+                    "custom_forward": f"{var_name} = x",
+                    "shape": str(node.output_shape),
+                    "activation": None
+                })
                 continue
 
             params = node.params or {}
@@ -373,7 +427,7 @@ class PyTorchCompiler(BaseCompiler):
                 init_str = "nn.Flatten(start_dim=1)"
 
             elif op_type in ("dense", "linear"):
-                in_features = node.input_shape[1] if node.input_shape else 10
+                in_features = node.input_shape[-1] if node.input_shape else 10
                 units = int(params.get("units") or params.get("out_features", 10))
                 init_str = f"nn.Linear(in_features={in_features}, out_features={units})"
                 activation = self.get_activation_function(params.get("activation"))
@@ -413,15 +467,65 @@ class PyTorchCompiler(BaseCompiler):
                 init_str = f"nn.LayerNorm(normalized_shape={normalized_shape})"
 
             elif op_type in ("multiheadattention", "mha"):
-                embed_dim = node.input_shape[2] if node.input_shape else 128
+                # Resolve embed_dim from config or query input shape
+                embed_dim = params.get("embed_dim") or params.get("key_dim") or params.get("embedding_dim")
+                if embed_dim is not None:
+                    embed_dim = int(embed_dim)
+                else:
+                    if node.input_shape:
+                        if isinstance(node.input_shape[0], list):
+                            mha_input_shape = node.input_shape[0]
+                        else:
+                            mha_input_shape = node.input_shape
+                        embed_dim = mha_input_shape[2] if len(mha_input_shape) > 2 else 128
+                    else:
+                        embed_dim = 128
                 num_heads = int(params.get("num_heads", 8))
                 init_str = f"nn.MultiheadAttention(embed_dim={embed_dim}, num_heads={num_heads}, batch_first=True)"
-                custom_forward = f"{var_name}, _ = self.{var_name}({input_arg}, {input_arg}, {input_arg})"
+                # MultiheadAttention requires Query, Key, Value inputs and returns output, weights.
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) == 3:
+                    custom_forward = f"{var_name}, _ = self.{var_name}({parents[0]}, {parents[1]}, {parents[2]})"
+                elif len(parents) == 2:
+                    custom_forward = f"{var_name}, _ = self.{var_name}({parents[0]}, {parents[1]}, {parents[1]})"
+                else:
+                    custom_forward = f"{var_name}, _ = self.{var_name}({input_arg}, {input_arg}, {input_arg})"
 
             elif op_type == "add":
                 is_tensor_op = True
                 parents_vars = [node_vars[pid] for pid in node.inputs]
                 custom_forward = f"{var_name} = {' + '.join(parents_vars)}"
+
+            elif op_type == "subtract":
+                is_tensor_op = True
+                parents_vars = [node_vars[pid] for pid in node.inputs]
+                if len(parents_vars) >= 2:
+                    sub_arg = " - ".join(parents_vars)
+                    custom_forward = f"{var_name} = {sub_arg}"
+                else:
+                    custom_forward = f"{var_name} = {input_arg}"
+
+            elif op_type == "maximum":
+                is_tensor_op = True
+                parents_vars = [node_vars[pid] for pid in node.inputs]
+                if len(parents_vars) >= 2:
+                    cur = parents_vars[0]
+                    for other in parents_vars[1:]:
+                        cur = f"torch.maximum({cur}, {other})"
+                    custom_forward = f"{var_name} = {cur}"
+                else:
+                    custom_forward = f"{var_name} = {input_arg}"
+
+            elif op_type == "minimum":
+                is_tensor_op = True
+                parents_vars = [node_vars[pid] for pid in node.inputs]
+                if len(parents_vars) >= 2:
+                    cur = parents_vars[0]
+                    for other in parents_vars[1:]:
+                        cur = f"torch.minimum({cur}, {other})"
+                    custom_forward = f"{var_name} = {cur}"
+                else:
+                    custom_forward = f"{var_name} = {input_arg}"
 
             elif op_type == "multiply":
                 is_tensor_op = True

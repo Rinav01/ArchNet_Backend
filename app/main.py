@@ -21,6 +21,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Initialize Prometheus metrics & OTel Tracing
+from app.config.monitoring import setup_monitoring
+setup_monitoring(app)
+
 # Create database tables at application startup (MVP local convenience)
 @app.on_event("startup")
 def startup_event():

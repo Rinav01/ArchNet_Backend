@@ -95,6 +95,7 @@ class CloudTrainingService:
                     "custom_job_id": custom_job.resource_name,
                     "logs": "Vertex AI CustomJob triggered and running asynchronously."
                 }
+                new_job.celery_task_id = f"vertex-ai-job-{str(job_id)}"
                 db.commit()
 
                 logger.info(f"Successfully triggered Vertex AI job: {custom_job.resource_name}")
@@ -102,10 +103,21 @@ class CloudTrainingService:
                 
             except Exception as e:
                 logger.error(f"Failed to launch GCP Vertex AI custom job: {e}. Falling back to Celery local training.")
-                # Fall back gracefully to Celery task if Vertex API triggers fail
-                task = async_run_training_job.delay(str(job_id))
-                return new_job, task.id
+                
+        # 2. Local Celery fallback / Orchestrated preflight verification chain
+        if dataset_id:
+            from app.tasks.tasks import async_dataset_verification_preflight
+            from celery import chain
+            workflow = chain(
+                async_dataset_verification_preflight.si(str(dataset_id), str(job_id)),
+                async_run_training_job.si(str(job_id))
+            )
+            chain_result = workflow.apply_async()
+            task_id = chain_result.id
+        else:
+            task = async_run_training_job.delay(str(job_id))
+            task_id = task.id
 
-        # 2. Local Celery fallback loop
-        task = async_run_training_job.delay(str(job_id))
-        return new_job, task.id
+        new_job.celery_task_id = task_id
+        db.commit()
+        return new_job, task_id

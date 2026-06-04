@@ -1,0 +1,57 @@
+import jax
+import jax.numpy as jnp
+from flax import linen as nn
+
+class MLBuilderModule(nn.Module):
+    """
+    Generated JAX Model from MLBuilder Architecture Canvas.
+    Name: {{ project_name }}
+    Framework: {{ framework }}
+    """
+    @nn.compact
+    def __call__(self, x):
+        """
+        Executes structural graph trace using inline variable allocations.
+        Expected input x format: [Batch, Height, Width, Channels] (channels_last format)
+        """
+        # Forward execution steps
+        {%- for step in forward_steps %}
+        {{ step.custom_forward }}  # shape: {{ step.shape }}
+        {%- if step.activation %}
+        {{ step.name }} = nn.{{ step.activation.lower() }}({{ step.name }})
+        {%- endif %}
+        {%- endfor %}
+        
+        return {{ output_var }}
+
+if __name__ == '__main__':
+    # Instantiate the Flax Module
+    model = MLBuilderModule()
+    print("Flax Module created successfully.")
+    
+    # Generate random input keys and key splits
+    key = jax.random.PRNGKey(42)
+    key, init_key = jax.random.split(key)
+    
+    # Verify execution with a dummy input
+    {%- if test_input_dims %}
+    mock_input = jnp.ones(({{ test_input_dims }}))
+    print("\nVerifying forward execution pass...")
+    try:
+        # Initialize JAX parameters
+        params = model.init(init_key, mock_input)
+        print("Success! Model weights successfully allocated.")
+        
+        # Execute forward pass with current params
+        output = model.apply(params, mock_input)
+        print("Success! JAX Forward pass completed.")
+        
+        if isinstance(output, tuple):
+            print("Outputs shape:", [o.shape for o in output])
+        else:
+            print("Output shape:", output.shape)
+    except Exception as e:
+        print("JAX execution trace warning/error:", e)
+    {%- else %}
+    print("Could not run forward pass verification: input shape unknown.")
+    {%- endif %}

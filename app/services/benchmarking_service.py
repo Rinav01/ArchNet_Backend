@@ -6,7 +6,9 @@ import logging
 import subprocess
 from app.services.memory_estimator import MemoryEstimator
 
-logger = logging.getLogger("mlbuilder.benchmarking_service")
+from app.config.logging import benchmark_logger
+
+logger = benchmark_logger
 
 class BenchmarkingService:
     @staticmethod
@@ -51,10 +53,9 @@ class BenchmarkingService:
                 input_shape = [dim if dim is not None else 1 for dim in raw_shape]
                 break
 
-        # 3. Create sandboxed Python benchmarking script
-        workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-        scratch_dir = os.path.join(workspace_dir, "scratch")
-        os.makedirs(scratch_dir, exist_ok=True)
+        # 3. Create sandboxed Python benchmarking script in standard OS temporary folder configurations
+        import tempfile
+        scratch_dir = tempfile.gettempdir()
         
         benchmark_file = os.path.join(scratch_dir, f"benchmark_{str(project_id)}.py")
         

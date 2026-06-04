@@ -7,9 +7,18 @@ from app.config.database import SessionLocal
 from app.models.training_job import TrainingJob
 from app.services.event_dispatcher import EventDispatcher
 
-logger = logging.getLogger("mlbuilder.training_tasks")
+from app.config.logging import training_logger
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=5)
+logger = training_logger
+
+@celery_app.task(
+    bind=True,
+    max_retries=5,
+    default_retry_delay=5,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True
+)
 def async_run_training_job(self, training_job_id_str: str):
     """Celery background task simulating real-time neural network training on CPU/GPU hardware.
     Updates metrics, loss/accuracy curves, and broadcasts epoch events over Redis Pub/Sub WebSockets.
@@ -45,7 +54,17 @@ def async_run_training_job(self, training_job_id_str: str):
 
         # 2. Simulate training epochs loop
         for epoch in range(1, job.epochs + 1):
+            db.refresh(job)
+            if job.status == "CANCELLED":
+                logger.info(f"Training job {training_job_id_str} was cancelled.")
+                return {"success": False, "error": "Job cancelled by user."}
+
             time.sleep(1.0) # Simulate hardware operational compute delays
+            
+            db.refresh(job)
+            if job.status == "CANCELLED":
+                logger.info(f"Training job {training_job_id_str} was cancelled.")
+                return {"success": False, "error": "Job cancelled by user."}
             
             # Synthesize convergence increments: loss decays, accuracy rises
             decay_rate = random.uniform(0.05, 0.15)
@@ -98,16 +117,20 @@ def async_run_training_job(self, training_job_id_str: str):
         logger.error(f"Training loop crashed: {e}", exc_info=True)
         db.rollback()
         try:
-            failed_job = db.query(TrainingJob).filter(TrainingJob.id == job_uuid).first()
-            if failed_job:
-                failed_job.status = "FAILED"
-                failed_job.metrics_metadata = {"error": str(e), "logs": "Crash logs recorded."}
-                db.commit()
+            if self.request.retries < self.max_retries:
+                logger.info(f"Retrying training task {self.request.id} ({self.request.retries + 1}/{self.max_retries})")
+                self.retry(exc=e)
+            else:
+                failed_job = db.query(TrainingJob).filter(TrainingJob.id == job_uuid).first()
+                if failed_job:
+                    failed_job.status = "FAILED"
+                    failed_job.metrics_metadata = {"error": str(e), "logs": "Crash logs recorded after max retries."}
+                    db.commit()
 
-            EventDispatcher.get_redis().publish(
-                "mlbuilder:project:training",
-                f'{{"type": "TrainingFailed", "training_job_id": "{training_job_id_str}", "status": "FAILED", "error": "{str(e)}"}}'
-            )
+                EventDispatcher.get_redis().publish(
+                    "mlbuilder:project:training",
+                    f'{{"type": "TrainingFailed", "training_job_id": "{training_job_id_str}", "status": "FAILED", "error": "{str(e)}"}}'
+                )
         except Exception as rb_err:
             logger.error(f"Training rollback database fail: {rb_err}")
 

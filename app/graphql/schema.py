@@ -242,6 +242,24 @@ class Query:
         except ValueError:
             raise Exception("Invalid project ID format.")
 
+        # Check Cache
+        from app.services.caching_service import CachingService
+        import json
+        cache_key = f"cache:project:automl:{project_id}"
+        cached_res = CachingService.get(cache_key)
+        if cached_res:
+            try:
+                suggestions_data = json.loads(cached_res)
+                return [
+                    AutoMLRecommendationType(
+                        severity=s["severity"],
+                        bottleneck=s["bottleneck"],
+                        recommended_action=s["recommended_action"]
+                    ) for s in suggestions_data
+                ]
+            except Exception:
+                pass
+
         # Retrieve nodes and edges
         from app.models.node import Node
         from app.models.edge import Edge
@@ -250,6 +268,11 @@ class Query:
 
         from app.services.automl_engine import AutoMLSuggestionEngine
         suggestions = AutoMLSuggestionEngine.analyze_architecture_bottlenecks(nodes, edges)
+        
+        try:
+            CachingService.set(cache_key, json.dumps(suggestions), expire_seconds=3600)
+        except Exception:
+            pass
         
         return [
             AutoMLRecommendationType(
@@ -559,6 +582,31 @@ class Mutation:
         return res
 
     @strawberry.mutation
+    def delete_project(
+        self,
+        id: strawberry.ID,
+        info
+    ) -> bool:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        res = ProjectService.delete_project(db, proj_uuid)
+        if res:
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="DELETE_PROJECT",
+                resource_type="PROJECT",
+                resource_id=id,
+                ip_address=info.context.ip_address
+            )
+        return res
+
+    @strawberry.mutation
     def import_project(self, info, name: str, graph_data: str) -> ProjectType:
         user = verify_role_and_ownership(info, ["admin", "editor"])
         db = info.context.db
@@ -612,6 +660,13 @@ class Mutation:
         if not project:
             raise Exception("Project not found.")
 
+        # Check Cache
+        from app.services.caching_service import CachingService
+        cache_key = f"cache:project:pytorch:{project_id}"
+        cached_code = CachingService.get(cache_key)
+        if cached_code:
+            return cached_code
+
         # Fetch nodes and edges
         from app.models.node import Node
         from app.models.edge import Edge
@@ -642,6 +697,9 @@ class Mutation:
             from app.codegen.pytorch.generator import PyTorchCompiler
             compiler = PyTorchCompiler()
             generated_code = compiler.compile(ir_graph)
+            
+            # Save to Cache
+            CachingService.set(cache_key, generated_code, expire_seconds=3600)
             
             # Log Audit trail
             AuditService.log_action(
@@ -679,6 +737,13 @@ class Mutation:
         if not project:
             raise Exception("Project not found.")
 
+        # Check Cache
+        from app.services.caching_service import CachingService
+        cache_key = f"cache:project:tensorflow:{project_id}"
+        cached_code = CachingService.get(cache_key)
+        if cached_code:
+            return cached_code
+
         # Fetch nodes and edges
         from app.models.node import Node
         from app.models.edge import Edge
@@ -710,11 +775,148 @@ class Mutation:
             compiler = TensorFlowCompiler()
             generated_code = compiler.compile(ir_graph)
             
+            # Save to Cache
+            CachingService.set(cache_key, generated_code, expire_seconds=3600)
+            
             # Log Audit trail
             AuditService.log_action(
                 db,
                 user_id=user.id,
                 action="GENERATE_TENSORFLOW_CODE",
+                resource_type="PROJECT",
+                resource_id=str(project.id),
+                ip_address=info.context.ip_address
+            )
+            return generated_code
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def generate_jax_code(
+        self,
+        project_id: strawberry.ID,
+        info
+    ) -> str:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.project import Project
+        if user.role == "admin":
+            project = db.query(Project).filter(Project.id == proj_uuid).first()
+        else:
+            project = ProjectService.get_project(db, proj_uuid, user_id=user.id)
+            
+        if not project:
+            raise Exception("Project not found.")
+
+        # Check Cache
+        from app.services.caching_service import CachingService
+        cache_key = f"cache:project:jax:{project_id}"
+        cached_code = CachingService.get(cache_key)
+        if cached_code:
+            return cached_code
+
+        from app.models.node import Node
+        from app.models.edge import Edge
+        nodes = db.query(Node).filter(Node.project_id == proj_uuid).all()
+        edges = db.query(Edge).filter(Edge.project_id == proj_uuid).all()
+
+        try:
+            from app.services.validation_service import ValidationService
+            sorted_nodes = ValidationService.validate_graph(nodes, edges)
+
+            from app.services.shape_inference_service import ShapeInferenceService
+            ShapeInferenceService.run_shape_inference(sorted_nodes, edges)
+            db.commit()
+
+            from app.ir.ir_graph import IRGraph
+            ir_graph = IRGraph.from_db(project, sorted_nodes, edges)
+            
+            from app.services.graph_engine import GraphOptimizer
+            GraphOptimizer.simplify_graph(ir_graph)
+
+            from app.codegen.jax.compiler import JAXCompiler
+            compiler = JAXCompiler()
+            generated_code = compiler.compile(ir_graph)
+            
+            # Save to Cache
+            CachingService.set(cache_key, generated_code, expire_seconds=3600)
+            
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="GENERATE_JAX_CODE",
+                resource_type="PROJECT",
+                resource_id=str(project.id),
+                ip_address=info.context.ip_address
+            )
+            return generated_code
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def generate_onnx_code(
+        self,
+        project_id: strawberry.ID,
+        info
+    ) -> str:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.project import Project
+        if user.role == "admin":
+            project = db.query(Project).filter(Project.id == proj_uuid).first()
+        else:
+            project = ProjectService.get_project(db, proj_uuid, user_id=user.id)
+            
+        if not project:
+            raise Exception("Project not found.")
+
+        # Check Cache
+        from app.services.caching_service import CachingService
+        cache_key = f"cache:project:onnx:{project_id}"
+        cached_code = CachingService.get(cache_key)
+        if cached_code:
+            return cached_code
+
+        from app.models.node import Node
+        from app.models.edge import Edge
+        nodes = db.query(Node).filter(Node.project_id == proj_uuid).all()
+        edges = db.query(Edge).filter(Edge.project_id == proj_uuid).all()
+
+        try:
+            from app.services.validation_service import ValidationService
+            sorted_nodes = ValidationService.validate_graph(nodes, edges)
+
+            from app.services.shape_inference_service import ShapeInferenceService
+            ShapeInferenceService.run_shape_inference(sorted_nodes, edges)
+            db.commit()
+
+            from app.ir.ir_graph import IRGraph
+            ir_graph = IRGraph.from_db(project, sorted_nodes, edges)
+            
+            from app.services.graph_engine import GraphOptimizer
+            GraphOptimizer.simplify_graph(ir_graph)
+
+            from app.codegen.onnx.compiler import ONNXCompiler
+            compiler = ONNXCompiler()
+            generated_code = compiler.compile(ir_graph)
+            
+            # Save to Cache
+            CachingService.set(cache_key, generated_code, expire_seconds=3600)
+            
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="GENERATE_ONNX_CODE",
                 resource_type="PROJECT",
                 resource_id=str(project.id),
                 ip_address=info.context.ip_address
@@ -797,6 +999,14 @@ class Mutation:
                 elif "tensorflow" in framework_str or "keras" in framework_str:
                     from app.codegen.tensorflow.compiler import TensorFlowCompiler
                     compiler = TensorFlowCompiler()
+                    generated_code = compiler.compile(ir_graph)
+                elif "jax" in framework_str or "flax" in framework_str:
+                    from app.codegen.jax.compiler import JAXCompiler
+                    compiler = JAXCompiler()
+                    generated_code = compiler.compile(ir_graph)
+                elif "onnx" in framework_str:
+                    from app.codegen.onnx.compiler import ONNXCompiler
+                    compiler = ONNXCompiler()
                     generated_code = compiler.compile(ir_graph)
                 else:
                     generated_code = f"# Framework compiler for '{project.framework}' not supported."
@@ -1000,6 +1210,59 @@ class Mutation:
             raise Exception(str(e))
 
     @strawberry.mutation
+    def cancel_training_job(
+        self,
+        training_job_id: strawberry.ID,
+        info
+    ) -> bool:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            job_uuid = uuid.UUID(training_job_id)
+        except ValueError:
+            raise Exception("Invalid training job ID format.")
+
+        from app.models.training_job import TrainingJob
+        job = db.query(TrainingJob).filter(TrainingJob.id == job_uuid).first()
+        if not job:
+            raise Exception("Training job not found.")
+
+        # Check project ownership/permissions
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=job.project_id)
+
+        if job.status in {"COMPLETED", "FAILED", "CANCELLED"}:
+            raise Exception(f"Cannot cancel a training job in {job.status} state.")
+
+        # Revoke the Celery task (hard cancellation)
+        if job.celery_task_id:
+            from app.tasks.celery_app import celery_app
+            celery_app.control.revoke(job.celery_task_id, terminate=True, signal="SIGKILL")
+
+        # Soft cancellation: update status to CANCELLED in DB
+        job.status = "CANCELLED"
+        db.commit()
+
+        # Publish WebSocket event
+        from app.services.event_dispatcher import EventDispatcher
+        EventDispatcher.get_redis().publish(
+            "mlbuilder:project:training",
+            f'{{"type": "TrainingCancelled", "training_job_id": "{training_job_id}", "status": "CANCELLED"}}'
+        )
+
+        # Log audit trail
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="CANCEL_TRAINING_JOB",
+            resource_type="PROJECT",
+            resource_id=str(job.project_id),
+            details={"training_job_id": str(job_uuid)},
+            ip_address=info.context.ip_address
+        )
+
+        return True
+
+    @strawberry.mutation
     def benchmark_project(
         self,
         project_id: strawberry.ID,
@@ -1021,6 +1284,13 @@ class Mutation:
             
         if not project:
             raise Exception("Project not found.")
+
+        # Check Cache
+        from app.services.caching_service import CachingService
+        cache_key = f"cache:project:benchmark:{project_id}"
+        cached_res = CachingService.get(cache_key)
+        if cached_res:
+            return cached_res
 
         # Compile code dynamically to feed to benchmarker
         from app.models.node import Node
@@ -1068,6 +1338,12 @@ class Mutation:
             )
             
             import json
+            # Save to Cache
+            try:
+                CachingService.set(cache_key, json.dumps(res), expire_seconds=3600)
+            except Exception:
+                pass
+                
             return json.dumps(res)
         except Exception as e:
             raise Exception(str(e))

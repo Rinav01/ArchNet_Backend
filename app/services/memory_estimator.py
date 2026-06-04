@@ -58,16 +58,19 @@ class MemoryEstimator:
             flops = 2 * (in_channels * kh * kw) * filters * oh * ow
 
         elif node_type in ("dense", "linear") and in_shape:
-            # In shape: [Batch, Features]
-            in_features = in_shape[1] if in_shape[1] is not None else 10
+            # In shape: [Batch, ..., Features]
+            in_features = in_shape[-1] if in_shape[-1] is not None else 10
             units = int(config.get("units") or config.get("out_features", 10))
             use_bias = bool(config.get("use_bias", True))
             
             # Param count: Units * (In_features + Bias)
             param_count = units * (in_features + (1 if use_bias else 0))
             
-            # FLOPs: 2 * In_features * Units
-            flops = 2 * in_features * units
+            # FLOPs: 2 * non-batch input size * Units
+            non_batch_dims_product = 1
+            for dim in in_shape[1:-1]:
+                non_batch_dims_product *= (int(dim) if dim is not None else 1)
+            flops = 2 * non_batch_dims_product * in_features * units
 
         elif node_type in ("batchnorm", "batchnorm2d") and in_shape:
             in_channels = in_shape[1] if in_shape[1] is not None else 3
@@ -135,9 +138,18 @@ class MemoryEstimator:
 
         elif node_type in ("multiheadattention", "mha") and in_shape:
             # Query in_shape: [Batch, Seq_Len, Embed_Dim]
-            embed_dim = in_shape[2] if in_shape[2] is not None else 128
+            q_shape = in_shape[0] if isinstance(in_shape[0], list) else in_shape
+            embed_dim = config.get("embed_dim") or config.get("key_dim") or config.get("embedding_dim")
+            if embed_dim is not None:
+                try:
+                    embed_dim = int(embed_dim)
+                except ValueError:
+                    embed_dim = None
+            if embed_dim is None:
+                embed_dim = q_shape[2] if len(q_shape) > 2 and q_shape[2] is not None else 128
+                
             num_heads = int(config.get("num_heads", 8))
-            seq_len = in_shape[1] if in_shape[1] is not None else 1
+            seq_len = q_shape[1] if len(q_shape) > 1 and q_shape[1] is not None else 1
             
             # Learnable weights: 4 projection matrices (Q, K, V, Output)
             param_count = 4 * (embed_dim * embed_dim)

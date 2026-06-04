@@ -79,6 +79,9 @@ class ProjectService:
         from app.services.event_dispatcher import EventDispatcher
         EventDispatcher.dispatch_node_added(project_id, new_node.id, new_node.label, new_node.type)
 
+        from app.services.caching_service import CachingService
+        CachingService.invalidate_project_cache(project_id)
+
         return new_node
 
     @staticmethod
@@ -114,6 +117,10 @@ class ProjectService:
         db.add(new_edge)
         db.commit()
         db.refresh(new_edge)
+
+        from app.services.caching_service import CachingService
+        CachingService.invalidate_project_cache(project_id)
+
         return new_edge
 
     @staticmethod
@@ -130,6 +137,9 @@ class ProjectService:
         from app.services.event_dispatcher import EventDispatcher
         EventDispatcher.dispatch_node_deleted(project_id, node_id)
 
+        from app.services.caching_service import CachingService
+        CachingService.invalidate_project_cache(project_id)
+
         return True
 
     @staticmethod
@@ -141,4 +151,23 @@ class ProjectService:
             
         db.delete(edge)
         db.commit()
+
+        from app.services.caching_service import CachingService
+        CachingService.invalidate_project_cache(project_id)
+
+        return True
+
+    @staticmethod
+    def delete_project(db: Session, project_id: uuid.UUID) -> bool:
+        """Delete a project from the database, cascadingly deleting nodes, edges, and tasks."""
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            return False
+            
+        db.delete(project)
+        db.commit()
+
+        from app.services.caching_service import CachingService
+        CachingService.invalidate_project_cache(project_id)
+
         return True

@@ -23,6 +23,8 @@ class TrainingJob(Base):
     
     # Store validation metrics, training speed, logs, and device configurations
     metrics_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    
+    celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

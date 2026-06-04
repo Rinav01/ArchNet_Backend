@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.models.node import Node
 from app.models.edge import Edge
 from app.services.event_dispatcher import EventDispatcher
+from app.services.caching_service import CachingService
 
 logger = logging.getLogger("mlbuilder.crdt_resolver")
 
@@ -54,6 +55,7 @@ class CRDTOperationResolver:
             db.add(new_node)
             db.commit()
             db.refresh(new_node)
+            CachingService.invalidate_project_cache(project_id)
             
             # Dispatch NodeAdded event globally
             EventDispatcher.dispatch_node_added(project_id, new_node.id, new_node.label, new_node.type)
@@ -82,6 +84,7 @@ class CRDTOperationResolver:
                 node.position_y = float(payload["position_y"])
                 node.updated_at = op_datetime
                 db.commit()
+                CachingService.invalidate_project_cache(project_id)
                 return {"success": True, "action": action, "payload": payload}
             else:
                 logger.info(f"Ignored out-of-order node move: {node_uuid}")
@@ -107,6 +110,7 @@ class CRDTOperationResolver:
                 node.config = merged_config
                 node.updated_at = op_datetime
                 db.commit()
+                CachingService.invalidate_project_cache(project_id)
                 return {"success": True, "action": action, "payload": {
                     "node_id": str(node_uuid),
                     "config": merged_config
@@ -133,6 +137,7 @@ class CRDTOperationResolver:
 
             db.delete(node)
             db.commit()
+            CachingService.invalidate_project_cache(project_id)
 
             # Dispatch NodeDeleted event globally
             EventDispatcher.dispatch_node_deleted(project_id, node_uuid)
@@ -175,6 +180,7 @@ class CRDTOperationResolver:
             db.add(new_edge)
             db.commit()
             db.refresh(new_edge)
+            CachingService.invalidate_project_cache(project_id)
             
             return {"success": True, "action": action, "edge": {
                 "id": str(new_edge.id),
@@ -192,6 +198,7 @@ class CRDTOperationResolver:
 
             db.delete(edge)
             db.commit()
+            CachingService.invalidate_project_cache(project_id)
             return {"success": True, "action": action, "payload": payload}
 
         else:

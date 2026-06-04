@@ -10,7 +10,14 @@ from app.config.settings import settings
 
 logger = logging.getLogger("mlbuilder.dataset_tasks")
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=5)
+@celery_app.task(
+    bind=True,
+    max_retries=5,
+    default_retry_delay=5,
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True
+)
 def async_process_dataset(self, dataset_id_str: str):
     """Celery task executing deep schema parsing and Pillow image analytics in the background.
     Publishes real-time Redis/WebSocket channel signals.
@@ -99,18 +106,20 @@ def async_process_dataset(self, dataset_id_str: str):
 
     except Exception as e:
         logger.error(f"Dataset parsing crashed: {e}", exc_info=True)
-        # Catch and commit failure state
         db.rollback()
         try:
-            failed_dataset = db.query(Dataset).filter(Dataset.id == dataset_uuid).first()
-            if failed_dataset:
-                failed_dataset.status = "FAILED"
-                db.commit()
-                
-            EventDispatcher.get_redis().publish(
-                "mlbuilder:project:dataset",
-                f'{{"type": "DatasetFailed", "dataset_id": "{dataset_id_str}", "status": "FAILED", "error": "{str(e)}"}}'
-            )
+            if self.request.retries < self.max_retries:
+                logger.info(f"Retrying dataset task {self.request.id} ({self.request.retries + 1}/{self.max_retries})")
+                self.retry(exc=e)
+            else:
+                failed_dataset = db.query(Dataset).filter(Dataset.id == dataset_uuid).first()
+                if failed_dataset:
+                    failed_dataset.status = "FAILED"
+                    db.commit()
+                EventDispatcher.get_redis().publish(
+                    "mlbuilder:project:dataset",
+                    f'{{"type": "DatasetFailed", "dataset_id": "{dataset_id_str}", "status": "FAILED", "error": "{str(e)}"}}'
+                )
         except Exception as rollback_err:
             logger.error(f"Ingestion database rollback fail: {rollback_err}")
             

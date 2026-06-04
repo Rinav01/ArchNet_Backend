@@ -4,6 +4,7 @@ import ast
 import uuid
 import subprocess
 from typing import List, Dict, Any
+from app.config.logging import compiler_logger
 
 class CompilationSandbox:
     @staticmethod
@@ -13,11 +14,21 @@ class CompilationSandbox:
         2. Appends dummy forward execution block (if not already included).
         3. Spawns an isolated child process to execute a forward pass, catching any runtime crashes.
         """
+        compiler_logger.info(
+            "Starting compilation validation in sandbox",
+            project_id=project_id,
+            framework=framework
+        )
         # 1. AST Syntactic Parsing
         try:
             ast.parse(code)
         except SyntaxError as e:
             error_details = f"Syntax Error: {e.msg} at line {e.lineno}, column {e.offset}"
+            compiler_logger.warn(
+                "AST syntax check failed",
+                project_id=project_id,
+                error=error_details
+            )
             if e.text:
                 error_details += f" (Code: {e.text.strip()})"
             return {
@@ -30,37 +41,59 @@ class CompilationSandbox:
         framework_clean = framework.lower().strip()
         is_pytorch = "pytorch" in framework_clean or "torch" in framework_clean
         is_tensorflow = "tensorflow" in framework_clean or "keras" in framework_clean
+        is_jax = "jax" in framework_clean or "flax" in framework_clean
+        is_onnx = "onnx" in framework_clean
 
         lib_available = False
+        target_lib = "PyTorch"
         if is_pytorch:
+            target_lib = "PyTorch"
             try:
                 import torch
                 lib_available = True
             except ImportError:
                 pass
         elif is_tensorflow:
+            target_lib = "TensorFlow"
             try:
                 import tensorflow
                 lib_available = True
             except ImportError:
                 pass
+        elif is_jax:
+            target_lib = "JAX/Flax"
+            try:
+                import jax
+                import flax
+                lib_available = True
+            except ImportError:
+                pass
+        elif is_onnx:
+            target_lib = "ONNX"
+            try:
+                import onnx
+                import numpy
+                lib_available = True
+            except ImportError:
+                pass
+        else:
+            target_lib = framework
 
         if not lib_available:
             # Standard AST syntax pass is already a huge win if framework library is missing in backend env
-            missing_lib = "PyTorch" if is_pytorch else "TensorFlow"
             return {
                 "success": True,
                 "compilation_errors": [],
                 "logs": (
                     f"AST Syntax Parse Successful. Sandboxed execution pass was skipped "
-                    f"because {missing_lib} is not installed in the local environment."
+                    f"because {target_lib} is not installed in the local environment."
                 )
             }
 
-        # 3. Create sandboxed directory in scratch workspace
-        workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        scratch_dir = os.path.join(workspace_dir, "scratch")
-        os.makedirs(scratch_dir, exist_ok=True)
+        # 3. Create sandboxed directory in standard OS temporary folder configurations
+        import tempfile
+        scratch_dir = tempfile.gettempdir()
+
 
         sandbox_filename = f"sandbox_{project_id}_{uuid.uuid4().hex[:8]}.py"
         sandbox_path = os.path.join(scratch_dir, sandbox_filename)
@@ -83,6 +116,11 @@ class CompilationSandbox:
                 os.remove(sandbox_path)
 
             if result.returncode == 0:
+                compiler_logger.info(
+                    "Sandbox forward pass execution succeeded",
+                    project_id=project_id,
+                    framework=framework
+                )
                 return {
                     "success": True,
                     "compilation_errors": [],
@@ -92,6 +130,12 @@ class CompilationSandbox:
                 # Compile traceback or execution details
                 err_logs = result.stderr or result.stdout
                 clean_err = CompilationSandbox._clean_traceback(err_logs)
+                compiler_logger.error(
+                    "Sandbox forward pass execution failed",
+                    project_id=project_id,
+                    framework=framework,
+                    error=clean_err
+                )
                 return {
                     "success": False,
                     "compilation_errors": [clean_err],
@@ -101,6 +145,11 @@ class CompilationSandbox:
         except subprocess.TimeoutExpired:
             if os.path.exists(sandbox_path):
                 os.remove(sandbox_path)
+            compiler_logger.error(
+                "Sandbox execution timed out",
+                project_id=project_id,
+                framework=framework
+            )
             return {
                 "success": False,
                 "compilation_errors": ["Subprocess execution exceeded the 10-second sandbox timeout threshold."],
@@ -109,6 +158,12 @@ class CompilationSandbox:
         except Exception as e:
             if os.path.exists(sandbox_path):
                 os.remove(sandbox_path)
+            compiler_logger.error(
+                "Sandbox launcher exception",
+                project_id=project_id,
+                framework=framework,
+                error=str(e)
+            )
             return {
                 "success": False,
                 "compilation_errors": [f"Execution launcher error: {str(e)}"],

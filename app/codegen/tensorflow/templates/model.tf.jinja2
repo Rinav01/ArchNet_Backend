@@ -12,7 +12,7 @@ def create_model():
     
     # 2. Define Network Architecture Layers
     {%- for step in layers_steps %}
-    {{ step.output_var }} = {{ step.keras_definition }}({{ step.input_vars }})  # shape: {{ step.shape }}
+    {{ step.keras_definition }}  # shape: {{ step.shape }}
     {%- if step.activation %}
     {{ step.output_var }} = layers.Activation('{{ step.activation }}')({{ step.output_var }})
     {%- endif %}

@@ -165,14 +165,40 @@ class TensorFlowCompiler(BaseCompiler):
 
             elif op_type in ("multiheadattention", "mha"):
                 num_heads = int(params.get("num_heads", 8))
-                embed_dim = node.input_shape[2] if node.input_shape else 128
+                embed_dim = params.get("embed_dim") or params.get("key_dim") or params.get("embedding_dim")
+                if embed_dim is not None:
+                    embed_dim = int(embed_dim)
+                else:
+                    if node.input_shape:
+                        if isinstance(node.input_shape[0], list):
+                            mha_input_shape = node.input_shape[0]
+                        else:
+                            mha_input_shape = node.input_shape
+                        embed_dim = mha_input_shape[2] if len(mha_input_shape) > 2 else 128
+                    else:
+                        embed_dim = 128
                 keras_def = f"layers.MultiHeadAttention(num_heads={num_heads}, key_dim={embed_dim})"
-                # In Keras, MultiHeadAttention takes query, value, key. Default to self-attention:
+                # In Keras, MultiHeadAttention takes query, value, key.
                 is_custom_call = True
-                custom_call_str = f"{var_name} = {keras_def}({input_arg_str}, {input_arg_str}, {input_arg_str})"
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) == 3:
+                    custom_call_str = f"{var_name} = {keras_def}({parents[0]}, {parents[2]}, {parents[1]})"
+                elif len(parents) == 2:
+                    custom_call_str = f"{var_name} = {keras_def}({parents[0]}, {parents[1]}, {parents[1]})"
+                else:
+                    custom_call_str = f"{var_name} = {keras_def}({input_arg_str}, {input_arg_str}, {input_arg_str})"
 
             elif op_type == "add":
                 keras_def = "layers.Add()"
+
+            elif op_type == "subtract":
+                keras_def = "layers.Subtract()"
+
+            elif op_type == "maximum":
+                keras_def = "layers.Maximum()"
+
+            elif op_type == "minimum":
+                keras_def = "layers.Minimum()"
 
             elif op_type == "multiply":
                 keras_def = "layers.Multiply()"

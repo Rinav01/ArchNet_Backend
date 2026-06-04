@@ -1,0 +1,72 @@
+import onnx
+from onnx import helper, TensorProto
+import numpy as np
+
+def create_mlbuilder_onnx_model():
+    """
+    Generated ONNX Model from MLBuilder Architecture Canvas.
+    Name: {{ project_name }}
+    Framework: {{ framework }}
+    Constructs an equivalent ONNX computational graph using standard onnx.helper APIs.
+    """
+    onnx_nodes = []
+    onnx_initializers = []
+    
+    # --- Weight and Param Initializers ---
+    {%- for init in initializers %}
+    {{ init }}
+    {%- endfor %}
+
+    # --- Computational Nodes ---
+    {%- for node in helper_nodes %}
+    {{ node }}
+    {%- endfor %}
+
+    # --- Graph Inputs & Outputs Sizing Schema ---
+    # Input expected in channels_first format: [Batch, Channels, Height, Width]
+    graph_input = helper.make_tensor_value_info(
+        "x",
+        TensorProto.FLOAT,
+        {{ input_dims }}
+    )
+    
+    # Output nodes matching terminal nodes
+    graph_outputs = []
+    {%- for leaf in final_leaves %}
+    graph_outputs.append(
+        helper.make_tensor_value_info(
+            "{{ leaf.name }}",
+            TensorProto.FLOAT,
+            {{ leaf.shape_dims }}
+        )
+    )
+    {%- endfor %}
+
+    # --- Construct Computational Graph ---
+    graph = helper.make_graph(
+        nodes=onnx_nodes,
+        name="MLBuilderVisualGraph",
+        inputs=[graph_input],
+        outputs=graph_outputs,
+        initializer=onnx_initializers
+    )
+
+    # --- Construct ONNX Model ---
+    model = helper.make_model(graph, producer_name="MLBuilder Workspace Compiler")
+    return model
+
+if __name__ == '__main__':
+    # Compile the ONNX model graph structure
+    onnx_model = create_mlbuilder_onnx_model()
+    print("ONNX Model graph constructed successfully.")
+    
+    # Check model consistency and validate topology schemas
+    try:
+        onnx.checker.check_model(onnx_model)
+        print("ONNX Model compiled and successfully validated!")
+        
+        # Save ONNX model binary to local disk
+        onnx.save(onnx_model, "mlbuilder_graph_model.onnx")
+        print("Saved compiled ONNX binary model as 'mlbuilder_graph_model.onnx'.")
+    except Exception as e:
+        print("ONNX validation trace warning/error:", e)

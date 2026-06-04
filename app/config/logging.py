@@ -21,6 +21,16 @@ class JSONFormatter(logging.Formatter):
         }
         
         # Include any extra custom dictionary parameters passed to log calls
+        standard_attrs = {
+            "args", "asctime", "created", "exc_info", "exc_text", "filename",
+            "funcName", "levelname", "levelno", "lineno", "module", "msecs",
+            "msg", "name", "pathname", "process", "processName", "relativeCreated",
+            "stack_info", "thread", "threadName", "message", "level"
+        }
+        for k, v in record.__dict__.items():
+            if k not in standard_attrs:
+                log_payload[k] = v
+
         if hasattr(record, "extra") and isinstance(record.extra, dict):
             for k, v in record.extra.items():
                 log_payload[k] = v
@@ -51,3 +61,31 @@ def setup_structured_logging(level: int = logging.INFO):
         l = logging.getLogger(logger_name)
         l.handlers = []
         l.propagate = True
+
+
+import structlog
+
+# Setup structlog configuration
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.stdlib.render_to_log_kwargs,
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.stdlib.BoundLogger,
+    cache_logger_on_first_use=True,
+)
+
+# Export four dedicated loggers
+request_logger = structlog.get_logger("mlbuilder.request")
+compiler_logger = structlog.get_logger("mlbuilder.compiler")
+training_logger = structlog.get_logger("mlbuilder.training")
+benchmark_logger = structlog.get_logger("mlbuilder.benchmark")

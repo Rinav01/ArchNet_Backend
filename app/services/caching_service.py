@@ -50,11 +50,16 @@ class CachingService:
             pid = str(project_id)
             r = cls.get_redis()
             keys_to_delete = [
-                f"cache:project:topo:{pid}",
+                f"cache:project:nodes:{pid}",
+                f"cache:project:edges:{pid}",
                 f"cache:project:pytorch:{pid}",
-                f"cache:project:tensorflow:{pid}"
+                f"cache:project:tensorflow:{pid}",
+                f"cache:project:jax:{pid}",
+                f"cache:project:onnx:{pid}",
+                f"cache:project:automl:{pid}",
+                f"cache:project:benchmark:{pid}"
             ]
-            logger.info(f"Invalidating cache rooms for project '{pid}'")
+            logger.info(f"Invalidating cache keys for project '{pid}'")
             r.delete(*keys_to_delete)
         except Exception as e:
-            logger.error(f"Failed to invalidate cache rooms for project '{project_id}': {e}")
+            logger.error(f"Failed to invalidate cache keys for project '{project_id}': {e}")
