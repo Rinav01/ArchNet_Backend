@@ -6,7 +6,7 @@ celery_app = Celery(
     "mlbuilder",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.tasks", "app.tasks.dataset_tasks", "app.tasks.training_tasks"]
+    include=["app.tasks.tasks", "app.tasks.dataset_tasks", "app.tasks.training_tasks", "app.workers.training_worker"]
 )
 
 celery_app.conf.update(
@@ -27,5 +27,6 @@ celery_app.conf.update(
         "app.tasks.tasks.async_compile_and_validate": {"queue": "high_priority"},
         "app.tasks.tasks.async_dataset_verification_preflight": {"queue": "high_priority"},
         "app.tasks.training_tasks.async_run_training_job": {"queue": "low_priority"},
+        "app.workers.training_worker.async_run_training_pipeline": {"queue": "low_priority"},
     }
 )

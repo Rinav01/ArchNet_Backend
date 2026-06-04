@@ -56,6 +56,8 @@ This repository houses the production-grade, asynchronous FastAPI backend. It co
 | Sandbox Benchmarking | ✅ | Isolated subprocess performance execution |
 | AutoML Diagnostics | ✅ | AI structural anti-pattern detection |
 | Vertex AI Training | ✅ | Cloud-scale serverless GPU training |
+| Training Engine | ✅ | In-memory dynamic PyTorch compile/load training |
+| Experiment Tracking | ✅ | DB persistence, run histories and comparison |
 | RBAC Security | ✅ | Enterprise-grade permission boundaries |
 | Audit Logging | ✅ | Transactional event trace persistence |
 | Dataset Ingestion | ✅ | CSV / ZIP / tensor dataset processing |
@@ -108,6 +110,8 @@ The backend is built using a highly decoupled, layered architecture to isolate p
 | CRDT Synchronization | Allows concurrent multi-user graph editing without lock contention |
 | Sandbox Benchmarking | Executes compiled models safely in isolated subprocesses |
 | Vertex AI Integration | Enables scalable cloud GPU orchestration |
+| Dynamic Training Engine | Dynamically loads and trains PyTorch graphs in memory |
+| Experiment Tracking | Auto-persists metrics, speed, VRAM, and hyperparameters |
 | AutoML Structural Diagnostics | Detects parameter explosions and architectural anti-patterns |
 | Redis Pub/Sub Presence Layer | Synchronizes live collaborative editing sessions |
 | RBAC + Audit Logging | Provides enterprise-grade security and operational traceability |
@@ -127,6 +131,24 @@ Shape Inference Engine
 IRGraph Compiler
         ↓
 Sandbox Benchmarking / Vertex AI Training
+```
+
+### Dynamic Training Engine Pipeline Flow
+```mermaid
+graph TD
+    subgraph Training Engine Pipeline
+        Start["Trigger Job (Mutation / Local Fallback)"] --> load_proj["1. Fetch Project, Nodes & Edges"]
+        load_proj --> compile_proj["2. Topologically Sort & Compile model to PyTorch"]
+        compile_proj --> load_ds["3. Download Dataset (Local/S3/GCS) & Parse format (CSV/ZIP/Npy)"]
+        load_ds --> dataloader["4. Initialize PyTorch DataLoader (Shuffle/Batch)"]
+        dataloader --> init_model["5. Dynamically load/instantiate MLBuilderModel onto Device (CPU/CUDA)"]
+        init_model --> train_loop["6. Train Loop: Forward pass -> Compute loss -> Backpropagation"]
+        train_loop --> validate_loop["7. Validation Loop: Compute evaluation metrics"]
+        validate_loop --> telemetry["8. Publish telemetry over Redis & update TrainingJob DB state"]
+        telemetry --> epoch_check{"More Epochs?"}
+        epoch_check -->|Yes| train_loop
+        epoch_check -->|No| save_run["9. Save final metrics & create TrainingRun (Experiment) record"]
+    end
 ```
 
 ### 1. Global Decoupled Data Flow
@@ -281,6 +303,18 @@ erDiagram
         datetime updated_at
     }
 
+    training_runs {
+        uuid id PK
+        uuid project_id FK
+        uuid training_job_id FK
+        float accuracy
+        float loss
+        jsonb metrics_json
+        jsonb config_json
+        datetime created_at
+        datetime updated_at
+    }
+
     audit_logs {
         uuid id PK
         uuid user_id FK
@@ -298,7 +332,9 @@ erDiagram
     projects ||--o{ nodes : contains
     projects ||--o{ edges : connects
     projects ||--o{ training_jobs : launches
+    projects ||--o{ training_runs : logs
     datasets ||--o{ training_jobs : feeds
+    training_jobs ||--o{ training_runs : generates
 ```
 
 ---
@@ -320,6 +356,8 @@ The platform supports robust, enterprise-grade access boundaries segregating adm
 | **Mutations `addNode` / `deleteNode`**| ❌ | ✅ | ✅ | Enforce Project Ownership check |
 | **Mutation `benchmarkProject`** | ❌ | ✅ | ✅ | Enforce Project Ownership check |
 | **Mutation `triggerTrainingJob`** | ❌ | ✅ | ✅ | Enforce Project & Dataset Ownership |
+| **Query `trainingRuns`** | ✅ | ✅ | ✅ | Enforce Project Read Permission |
+| **Query `trainingRun`** | ✅ | ✅ | ✅ | Enforce Project Read Permission |
 
 ---
 
@@ -678,11 +716,14 @@ To prevent authentication leaks and communicate specific room boundary failures,
 │   │   ├── automl_engine.py   # Diagnostics scanning for parameter explosions & vanishing risks
 │   │   ├── benchmarking_service.py # Isolated process sandboxed model telemetry (ms, FLOPs)
 │   │   ├── cloud_training_service.py # Vertex AI cloud adapter triggers
+│   │   ├── training_service.py # Dynamic compiling loader & training/validation loops
 │   │   └── audit_service.py   # Enterprise log recorder
 │   ├── graphql/
 │   │   ├── schema.py          # Queries, Mutations, and extensions registration
 │   │   ├── ws_router.py       # Starlette WebSocket router for collaborative CRDT presence
 │   │   └── types/             # Strawberry GraphQL Types schemas definitions
+│   ├── workers/
+│   │   └── training_worker.py # Background dynamic training loop Celery task
 │   └── tasks/
 │       ├── celery_app.py      # Celery task configuration
 │       ├── tasks.py           # Background async compilation
@@ -842,3 +883,44 @@ mutation BenchmarkCanvas {
 }
 ```
 *Returns JSON metrics holding `latency_ms`, `throughput_fps`, `peak_memory_mb`, and `flops` calculations.*
+
+### 6. Trigger Training Job (Local Celery / Vertex AI Fallback)
+```graphql
+mutation StartTraining {
+  triggerTrainingJob(
+    projectId: "da52f9c9-598d-4e9b-b0b3-d39b85c132be"
+    epochs: 10
+    datasetId: "7fb709ce-4697-4179-ba9a-d55228f5c6ec"
+  )
+}
+```
+*Triggers the local background training loop worker or Vertex AI custom training container, returning the task or job ID.*
+
+### 7. Retrieve Project Experiment Training Runs
+```graphql
+query GetProjectRuns {
+  trainingRuns(projectId: "da52f9c9-598d-4e9b-b0b3-d39b85c132be") {
+    id
+    accuracy
+    loss
+    configJson
+    metricsJson
+    createdAt
+  }
+}
+```
+
+### 8. Retrieve Specific Experiment Training Run Details
+```graphql
+query GetRunDetails {
+  trainingRun(id: "3cca4601-24dd-4172-ba9a-d55228f5c6ec") {
+    id
+    projectId
+    trainingJobId
+    accuracy
+    loss
+    metricsJson
+    configJson
+  }
+}
+```

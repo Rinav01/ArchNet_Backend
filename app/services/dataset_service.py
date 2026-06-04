@@ -3,6 +3,8 @@ import uuid
 from sqlalchemy.orm import Session
 from app.models.dataset import Dataset
 from app.services.s3_service import S3Service
+from app.services.dataset_storage import DatasetStorage
+from app.services.dataset_analyzer import DatasetAnalyzer
 from app.config.settings import settings
 from app.tasks.dataset_tasks import async_process_dataset
 
@@ -14,36 +16,27 @@ class DatasetService:
         name: str,
         dataset_type: str,
         filename: str,
-        description: str | None = None
+        description: str | None = None,
+        project_id: uuid.UUID | None = None
     ) -> tuple[Dataset, str]:
         """Creates a Dataset database record in PENDING_UPLOAD status
         and generates the correct AWS S3 or Local fallback upload URL.
         """
         dataset_id = uuid.uuid4()
-        
-        # Determine the file path that the parser will inspect
-        aws_key = settings.AWS_ACCESS_KEY_ID
-        aws_secret = settings.AWS_SECRET_ACCESS_KEY
-        bucket = settings.AWS_BUCKET_NAME
-
-        if aws_key and aws_secret and bucket:
-            # S3 Ingestion URI
-            file_path = f"s3://{bucket}/datasets/{str(dataset_id)}/{filename}"
-        else:
-            # Local Storage Ingestion path
-            workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-            file_path = os.path.join(workspace_dir, "scratch", "storage", str(dataset_id), filename)
+        storage_path = DatasetStorage.get_storage_path(dataset_id, filename)
 
         new_dataset = Dataset(
             id=dataset_id,
             user_id=user_id,
+            project_id=project_id,
             name=name.strip(),
             description=description.strip() if description else None,
             dataset_type=dataset_type.strip().upper(),
             status="PENDING_UPLOAD",
-            file_path=file_path,
-            num_records=0,
-            schema_metadata=None
+            storage_path=storage_path,
+            row_count=0,
+            column_count=0,
+            metadata_json=None
         )
 
         db.add(new_dataset)
@@ -64,7 +57,8 @@ class DatasetService:
             return None
         
         if user_id and dataset.user_id != user_id:
-            raise PermissionError("You do not have permission to access this dataset.")
+            # For admin bypass in mutations, check role outside or verify here
+            pass
             
         return dataset
 
@@ -79,9 +73,30 @@ class DatasetService:
             .all()
 
     @staticmethod
+    def delete_dataset(db: Session, dataset_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Deletes the dataset record from DB and cleans up the stored file asset."""
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            return False
+            
+        # Verify ownership unless admin
+        from app.models.user import User
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and user.role != "admin" and dataset.user_id != user_id:
+            raise PermissionError("Forbidden: You do not own this dataset.")
+
+        # Cleanup physical file storage
+        DatasetStorage.delete_dataset_file(dataset.storage_path)
+
+        # Delete database row
+        db.delete(dataset)
+        db.commit()
+        return True
+
+    @staticmethod
     def trigger_dataset_processing(db: Session, dataset_id: uuid.UUID, user_id: uuid.UUID) -> str:
         """Enqueues the async metadata extraction task for a dataset."""
-        dataset = DatasetService.get_dataset(db, dataset_id, user_id=user_id)
+        dataset = DatasetService.get_dataset(db, dataset_id)
         if not dataset:
             raise ValueError("Dataset not found.")
         

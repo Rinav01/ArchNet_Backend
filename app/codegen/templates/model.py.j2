@@ -1,0 +1,54 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class GeneratedModel(nn.Module):
+    """
+    Generated PyTorch Model from MLBuilder/ArchNet Architecture Canvas.
+    Project Name: {{ project_name }}
+    Framework: {{ framework }}
+    """
+    def __init__(self):
+        super(GeneratedModel, self).__init__()
+        
+        # Layer Definitions
+        {%- for layer in layers_init %}
+        self.{{ layer.name }} = {{ layer.pytorch_init }}
+        {%- endfor %}
+
+    def forward(self, x):
+        # input shape comment: {{ input_shape_comment }}
+        x_input = x
+        
+        # Forward execution flow
+        {%- for step in forward_steps %}
+        {{ step.custom_forward }}  # shape: {{ step.shape }}
+        {%- if step.activation %}
+        {{ step.name }} = {{ step.activation }}({{ step.name }})
+        {%- endif %}
+        {%- endfor %}
+        
+        return {{ forward_steps[-1].name if forward_steps else 'x' }}
+
+if __name__ == "__main__":
+    # Example Model Instantiation & Test Forward Pass
+    model = GeneratedModel()
+    print("Model Architecture:\n", model)
+    
+    # Generate dummy input matching shape {{ input_shape_test }}
+    {% if test_input_dims %}
+    dummy_input = torch.randn({{ test_input_dims }})
+    # If the input type requires integers (e.g. Embedding layer takes integer token indexes)
+    # we convert dummy input to long tensor.
+    if dummy_input.ndim == 2:
+        dummy_input = dummy_input.long().abs() % 100
+        
+    try:
+        output = model(dummy_input)
+        print("Forward pass successful!")
+        print("Output shape:", output.shape)
+    except Exception as e:
+        print("Error running forward pass:", e)
+    {% else %}
+    print("Could not generate dummy input: input shape unknown.")
+    {% endif %}

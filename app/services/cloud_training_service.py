@@ -105,17 +105,25 @@ class CloudTrainingService:
                 logger.error(f"Failed to launch GCP Vertex AI custom job: {e}. Falling back to Celery local training.")
                 
         # 2. Local Celery fallback / Orchestrated preflight verification chain
+        from app.workers.training_worker import async_run_training_pipeline
+        payload = {
+            "projectId": str(project_id),
+            "datasetId": str(dataset_id) if dataset_id else None,
+            "epochs": epochs,
+            "trainingJobId": str(job_id)
+        }
+
         if dataset_id:
             from app.tasks.tasks import async_dataset_verification_preflight
             from celery import chain
             workflow = chain(
                 async_dataset_verification_preflight.si(str(dataset_id), str(job_id)),
-                async_run_training_job.si(str(job_id))
+                async_run_training_pipeline.si(payload)
             )
             chain_result = workflow.apply_async()
             task_id = chain_result.id
         else:
-            task = async_run_training_job.delay(str(job_id))
+            task = async_run_training_pipeline.delay(payload)
             task_id = task.id
 
         new_job.celery_task_id = task_id

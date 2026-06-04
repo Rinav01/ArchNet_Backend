@@ -10,6 +10,8 @@ from app.graphql.types.auth_payload import AuthPayload
 from app.graphql.types.dataset_type import DatasetType, DatasetUploadPayload
 from app.graphql.types.training_type import TrainingJobType, AutoMLRecommendationType
 from app.graphql.types.audit_log_type import AuditLogType
+from app.graphql.types.compilation_result import CompilationResult
+from app.graphql.types.training_run_type import TrainingRunType
 from app.auth.rbac import verify_role_and_ownership
 from app.services.audit_service import AuditService
 from app.models.audit_log import AuditLog
@@ -156,6 +158,7 @@ class Query:
         return DatasetType(
             id=dataset.id,
             user_id=dataset.user_id,
+            project_id=dataset.project_id,
             name=dataset.name,
             description=dataset.description,
             dataset_type=dataset.dataset_type,
@@ -163,6 +166,10 @@ class Query:
             file_path=dataset.file_path,
             num_records=dataset.num_records,
             schema_metadata=dataset.schema_metadata,
+            storage_path=dataset.storage_path,
+            row_count=dataset.row_count,
+            column_count=dataset.column_count,
+            metadata_json=dataset.metadata_json,
             created_at=dataset.created_at,
             updated_at=dataset.updated_at
         )
@@ -187,6 +194,7 @@ class Query:
             DatasetType(
                 id=d.id,
                 user_id=d.user_id,
+                project_id=d.project_id,
                 name=d.name,
                 description=d.description,
                 dataset_type=d.dataset_type,
@@ -194,10 +202,40 @@ class Query:
                 file_path=d.file_path,
                 num_records=d.num_records,
                 schema_metadata=d.schema_metadata,
+                storage_path=d.storage_path,
+                row_count=d.row_count,
+                column_count=d.column_count,
+                metadata_json=d.metadata_json,
                 created_at=d.created_at,
                 updated_at=d.updated_at
             ) for d in datasets
         ]
+
+    @strawberry.field
+    def get_dataset_preview(self, info, dataset_id: strawberry.ID) -> strawberry.scalars.JSON | None:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            dataset_uuid = uuid.UUID(dataset_id)
+        except ValueError:
+            raise Exception("Invalid dataset ID format.")
+
+        from app.models.dataset import Dataset
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_uuid).first()
+        if not dataset:
+            raise Exception("Dataset not found.")
+
+        if user.role != "admin" and dataset.user_id != user.id:
+            raise Exception("Forbidden: You do not have permission to access this dataset.")
+
+        if not dataset.metadata_json:
+            return None
+
+        preview = dataset.metadata_json.get("preview_data")
+        if preview:
+            return preview
+            
+        return dataset.metadata_json
 
     @strawberry.field
     def training_job(self, info, id: strawberry.ID) -> TrainingJobType | None:
@@ -231,6 +269,60 @@ class Query:
             metrics_metadata=job.metrics_metadata,
             created_at=job.created_at,
             updated_at=job.updated_at
+        )
+
+    @strawberry.field
+    def training_runs(self, info, project_id: strawberry.ID) -> List[TrainingRunType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.training_run import TrainingRun
+        runs = db.query(TrainingRun).filter(TrainingRun.project_id == proj_uuid).order_by(TrainingRun.created_at.desc()).all()
+        return [
+            TrainingRunType(
+                id=run.id,
+                project_id=run.project_id,
+                training_job_id=run.training_job_id,
+                accuracy=run.accuracy,
+                loss=run.loss,
+                metrics_json=run.metrics_json,
+                config_json=run.config_json,
+                created_at=run.created_at,
+                updated_at=run.updated_at
+            ) for run in runs
+        ]
+
+    @strawberry.field
+    def training_run(self, info, id: strawberry.ID) -> TrainingRunType | None:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            run_uuid = uuid.UUID(id)
+        except ValueError:
+            raise Exception("Invalid training run ID format.")
+
+        from app.models.training_run import TrainingRun
+        run = db.query(TrainingRun).filter(TrainingRun.id == run_uuid).first()
+        if not run:
+            return None
+
+        # Verify project access
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=run.project_id)
+
+        return TrainingRunType(
+            id=run.id,
+            project_id=run.project_id,
+            training_job_id=run.training_job_id,
+            accuracy=run.accuracy,
+            loss=run.loss,
+            metrics_json=run.metrics_json,
+            config_json=run.config_json,
+            created_at=run.created_at,
+            updated_at=run.updated_at
         )
 
     @strawberry.field
@@ -634,6 +726,71 @@ class Mutation:
                 created_at=project.created_at,
                 updated_at=project.updated_at
             )
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def compile_project(
+        self,
+        project_id: strawberry.ID,
+        info
+    ) -> CompilationResult:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        # Fetch project with role-sensitive checks
+        from app.models.project import Project
+        if user.role == "admin":
+            project = db.query(Project).filter(Project.id == proj_uuid).first()
+        else:
+            project = ProjectService.get_project(db, proj_uuid, user_id=user.id)
+            
+        if not project:
+            raise Exception("Project not found.")
+
+        # Fetch nodes and edges
+        from app.models.node import Node
+        from app.models.edge import Edge
+        nodes = db.query(Node).filter(Node.project_id == proj_uuid).all()
+        edges = db.query(Edge).filter(Edge.project_id == proj_uuid).all()
+
+        try:
+            # Validate and sort
+            from app.services.validation_service import ValidationService
+            sorted_nodes = ValidationService.validate_graph(nodes, edges)
+
+            # Infer shapes
+            from app.services.shape_inference_service import ShapeInferenceService
+            ShapeInferenceService.run_shape_inference(sorted_nodes, edges)
+            db.commit()
+
+            # Compile using framework-agnostic IRGraph
+            from app.ir.ir_graph import IRGraph
+            ir_graph = IRGraph.from_db(project, sorted_nodes, edges)
+            
+            # Apply graph optimizations
+            from app.services.graph_engine import GraphOptimizer
+            GraphOptimizer.simplify_graph(ir_graph)
+
+            # Generate PyTorch code
+            from app.codegen.pytorch_generator import PyTorchGenerator
+            compiler = PyTorchGenerator()
+            generated_code = compiler.compile(ir_graph)
+            
+            # Log Audit trail
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="COMPILE_PROJECT",
+                resource_type="PROJECT",
+                resource_id=str(project.id),
+                ip_address=info.context.ip_address
+            )
+            return CompilationResult(code=generated_code)
         except Exception as e:
             raise Exception(str(e))
 
@@ -1112,6 +1269,7 @@ class Mutation:
             dataset_gql = DatasetType(
                 id=dataset.id,
                 user_id=dataset.user_id,
+                project_id=dataset.project_id,
                 name=dataset.name,
                 description=dataset.description,
                 dataset_type=dataset.dataset_type,
@@ -1119,10 +1277,106 @@ class Mutation:
                 file_path=dataset.file_path,
                 num_records=dataset.num_records,
                 schema_metadata=dataset.schema_metadata,
+                storage_path=dataset.storage_path,
+                row_count=dataset.row_count,
+                column_count=dataset.column_count,
+                metadata_json=dataset.metadata_json,
                 created_at=dataset.created_at,
                 updated_at=dataset.updated_at
             )
             return DatasetUploadPayload(dataset=dataset_gql, upload_url=upload_url)
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def upload_dataset(
+        self,
+        name: str,
+        dataset_type: str,
+        filename: str,
+        info,
+        description: str | None = None,
+        project_id: strawberry.ID | None = None
+    ) -> DatasetUploadPayload:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id) if project_id else None
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.services.dataset_service import DatasetService
+        try:
+            dataset, upload_url = DatasetService.create_dataset(
+                db,
+                user_id=user.id,
+                name=name,
+                dataset_type=dataset_type,
+                filename=filename,
+                description=description,
+                project_id=proj_uuid
+            )
+            
+            # Log Audit trail
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="CREATE_DATASET",
+                resource_type="DATASET",
+                resource_id=str(dataset.id),
+                details={"name": name, "dataset_type": dataset_type},
+                ip_address=info.context.ip_address
+            )
+            
+            dataset_gql = DatasetType(
+                id=dataset.id,
+                user_id=dataset.user_id,
+                project_id=dataset.project_id,
+                name=dataset.name,
+                description=dataset.description,
+                dataset_type=dataset.dataset_type,
+                status=dataset.status,
+                file_path=dataset.file_path,
+                num_records=dataset.num_records,
+                schema_metadata=dataset.schema_metadata,
+                storage_path=dataset.storage_path,
+                row_count=dataset.row_count,
+                column_count=dataset.column_count,
+                metadata_json=dataset.metadata_json,
+                created_at=dataset.created_at,
+                updated_at=dataset.updated_at
+            )
+            return DatasetUploadPayload(dataset=dataset_gql, upload_url=upload_url)
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def delete_dataset(
+        self,
+        id: strawberry.ID,
+        info
+    ) -> bool:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            dataset_uuid = uuid.UUID(id)
+        except ValueError:
+            raise Exception("Invalid dataset ID format.")
+
+        from app.services.dataset_service import DatasetService
+        try:
+            res = DatasetService.delete_dataset(db, dataset_uuid, user.id)
+            if res:
+                # Log Audit trail
+                AuditService.log_action(
+                    db,
+                    user_id=user.id,
+                    action="DELETE_DATASET",
+                    resource_type="DATASET",
+                    resource_id=id,
+                    ip_address=info.context.ip_address
+                )
+            return res
         except Exception as e:
             raise Exception(str(e))
 

@@ -1,0 +1,88 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+from model import GeneratedModel
+
+def train_model(epochs=10, batch_size=32, lr=0.001):
+    print("Initializing model...")
+    model = GeneratedModel()
+    
+    # Check device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    print(f"Using device: {device}")
+    
+    # Standard dummy dataset for demonstration
+    # (Using the target input shape: {{ input_shape_test }})
+    {% if test_input_dims %}
+    print("Generating dummy training dataset...")
+    # Generate 128 samples, removing the placeholder batch size of 1
+    # Check if the first layer is an Embedding layer
+    is_embedding = False
+    {% if forward_steps and forward_steps[0].name %}
+    # We inspect layers if needed
+    {% endif %}
+    
+    # Check dimensions
+    dims_list = [{{ test_input_dims }}]
+    # Replace first element (batch size) with 128
+    if len(dims_list) > 0:
+        # Check if first element is indeed 1 (batch dimension)
+        # We can dynamically build input tensor
+        pass
+    
+    # Let's generate dummy inputs based on dimensions
+    dummy_dims = [{{ test_input_dims }}]
+    # Ensure batch dim is 128 for training
+    train_dims = [128] + dummy_dims[1:]
+    
+    X_dummy = torch.randn(*train_dims)
+    if X_dummy.ndim == 2:
+        # Embedding or sequential layers fallback to integer tokens
+        X_dummy = X_dummy.long().abs() % 100
+        
+    # Standard dummy targets
+    y_dummy = torch.randn(128, 1)
+    
+    dataset = TensorDataset(X_dummy, y_dummy)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
+    # Loss and Optimizer
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    
+    print("Starting training loop...")
+    for epoch in range(1, epochs + 1):
+        model.train()
+        epoch_loss = 0.0
+        for batch_idx, (data, targets) in enumerate(dataloader):
+            data, targets = data.to(device), targets.to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(data)
+            
+            # Reshape target dynamically to match output shape
+            if outputs.shape != targets.shape:
+                if outputs.ndim == targets.ndim:
+                    targets = targets.expand_as(outputs)
+                else:
+                    # Resize targets to match output shape
+                    targets = torch.randn_like(outputs)
+            
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+            
+            epoch_loss += loss.item() * data.size(0)
+            
+        epoch_loss /= len(dataloader.dataset)
+        print(f"Epoch {epoch}/{epochs} - Loss: {epoch_loss:.4f}")
+        
+    print("Training completed successfully!")
+    {% else %}
+    print("Input shape unknown. Cannot run dummy training.")
+    {% endif %}
+
+if __name__ == "__main__":
+    train_model()

@@ -6,6 +6,7 @@ from datetime import datetime
 class DatasetType:
     id: uuid.UUID
     user_id: uuid.UUID
+    project_id: uuid.UUID | None
     name: str
     description: strawberry.Private[str | None] = None
     dataset_type: str
@@ -13,6 +14,10 @@ class DatasetType:
     file_path: str | None
     num_records: int
     schema_metadata: strawberry.scalars.JSON | None
+    storage_path: str | None
+    row_count: int | None
+    column_count: int | None
+    metadata_json: strawberry.scalars.JSON | None
     created_at: datetime
     updated_at: datetime
 

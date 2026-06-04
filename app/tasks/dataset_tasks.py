@@ -72,36 +72,30 @@ def async_process_dataset(self, dataset_id_str: str):
             file_path = temp_local_file
 
         # 2. Trigger appropriate parsing engine
-        dtype = dataset.dataset_type.lower().strip()
-        num_records = 0
-        metadata = {}
-
-        if "csv" in dtype:
-            num_records, metadata = DatasetParserService.parse_csv_metadata(file_path)
-        elif "image_zip" in dtype or "zip" in dtype:
-            num_records, metadata = DatasetParserService.parse_image_zip_metadata(file_path)
-        elif "tensor" in dtype or "numpy" in dtype or "npy" in dtype:
-            num_records, metadata = DatasetParserService.parse_tensor_metadata(file_path)
-        else:
-            raise ValueError(f"Unsupported dataset parsing format: {dataset.dataset_type}")
+        from app.services.dataset_analyzer import DatasetAnalyzer
+        analysis = DatasetAnalyzer.analyze_dataset(file_path, dataset.dataset_type)
+        row_count = analysis["row_count"]
+        column_count = analysis["column_count"]
+        metadata_json = analysis["metadata_json"]
 
         # 3. Success! Commit schema mappings
-        dataset.num_records = num_records
-        dataset.schema_metadata = metadata
+        dataset.row_count = row_count
+        dataset.column_count = column_count
+        dataset.metadata_json = metadata_json
         dataset.status = "READY"
         db.commit()
 
         # Publish finished event over Redis Pub/Sub
         EventDispatcher.get_redis().publish(
             "mlbuilder:project:dataset",
-            f'{{"type": "DatasetProcessed", "dataset_id": "{dataset_id_str}", "status": "READY", "num_records": {num_records}}}'
+            f'{{"type": "DatasetProcessed", "dataset_id": "{dataset_id_str}", "status": "READY", "num_records": {row_count}}}'
         )
 
         return {
             "success": True,
             "dataset_id": dataset_id_str,
-            "num_records": num_records,
-            "metadata": metadata
+            "num_records": row_count,
+            "metadata": metadata_json
         }
 
     except Exception as e:
