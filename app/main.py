@@ -70,6 +70,13 @@ def read_root():
         "graphql_endpoint": "/graphql"
     }
 
+# Serve static exports files
+from fastapi.staticfiles import StaticFiles
+import os
+exports_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "exports"))
+os.makedirs(exports_dir, exist_ok=True)
+app.mount("/exports", StaticFiles(directory=exports_dir), name="exports")
+
 # Local Storage Fallback Mock Uploader Endpoint
 import os
 import shutil

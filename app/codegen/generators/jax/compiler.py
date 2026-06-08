@@ -4,11 +4,17 @@ from jinja2 import Environment, FileSystemLoader
 from typing import List, Dict, Any
 
 from app.codegen.base_compiler import BaseCompiler
+from app.codegen.generators.registry import BaseGenerator
 from app.ir.ir_graph import IRGraph
 from app.ir.ir_node import IRNode
 
-class JAXCompiler(BaseCompiler):
+class JAXCompiler(BaseGenerator, BaseCompiler):
     """JAX/Flax Linen code generator compiling framework-agnostic IRGraph definitions into runnable Flax nn.Module scripts."""
+
+    def generate(self, ir_graph: IRGraph) -> str:
+        """Generates JAX/Flax code conforming to the BaseGenerator contract."""
+        return self.compile(ir_graph)
+
 
     @staticmethod
     def clean_variable_name(label: str) -> str:

@@ -5,7 +5,7 @@ from alembic import context
 
 from app.config.settings import settings
 from app.config.database import Base
-from app.models import User, Project, Node, Edge, Dataset, TrainingJob, AuditLog
+from app.models import *
 
 config = context.config
 

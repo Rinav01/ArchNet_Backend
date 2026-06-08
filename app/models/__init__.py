@@ -6,6 +6,17 @@ from app.models.dataset import Dataset
 from app.models.training_job import TrainingJob
 from app.models.audit_log import AuditLog
 from app.models.training_run import TrainingRun
+from app.models.export_artifact import ExportArtifact
+from app.models.model_artifact import ModelArtifact
+from app.models.deployment import Deployment
+from app.models.deployment_metrics import DeploymentMetrics
+from app.models.experiment import Experiment
+from app.models.dataset_version import DatasetVersion
 
-__all__ = ["User", "Project", "Node", "Edge", "Dataset", "TrainingJob", "AuditLog", "TrainingRun"]
+__all__ = [
+    "User", "Project", "Node", "Edge", "Dataset", "TrainingJob",
+    "AuditLog", "TrainingRun", "ExportArtifact", "ModelArtifact",
+    "Deployment", "DeploymentMetrics", "Experiment", "DatasetVersion"
+]
+
 

@@ -82,16 +82,11 @@ def async_compile_and_validate(self, project_id_str: str, user_id_str: str):
             ir_graph = IRGraph.from_db(project, sorted_nodes, edges)
             GraphOptimizer.simplify_graph(ir_graph)
 
-            framework_str = project.framework.lower().strip()
-            if "pytorch" in framework_str or "torch" in framework_str:
-                from app.codegen.pytorch.generator import PyTorchCompiler
-                compiler = PyTorchCompiler()
-                generated_code = compiler.compile(ir_graph)
-            elif "tensorflow" in framework_str or "keras" in framework_str:
-                from app.codegen.tensorflow.compiler import TensorFlowCompiler
-                compiler = TensorFlowCompiler()
-                generated_code = compiler.compile(ir_graph)
-            else:
+            from app.codegen.generators.registry import GeneratorRegistry
+            try:
+                compiler = GeneratorRegistry.get_generator(project.framework)
+                generated_code = compiler.generate(ir_graph)
+            except ValueError:
                 generated_code = f"# Asynchronous compiler for '{project.framework}' is not supported."
 
             # Execute Sandbox Child Verification

@@ -24,7 +24,7 @@ class MLBuilderModel(nn.Module):
         {%- for step in forward_steps %}
         {{ step.custom_forward }}  # shape: {{ step.shape }}
         {%- if step.activation %}
-        {{ step.name }} = {{ step.activation }}({{ step.name }})
+        {{ step.name }} = ({{ step.activation }})({{ step.name }})
         {%- endif %}
         {%- endfor %}
         

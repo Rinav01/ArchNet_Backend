@@ -1,3 +1,4 @@
+from datetime import datetime
 import strawberry
 import uuid
 from typing import List
@@ -12,6 +13,15 @@ from app.graphql.types.training_type import TrainingJobType, AutoMLRecommendatio
 from app.graphql.types.audit_log_type import AuditLogType
 from app.graphql.types.compilation_result import CompilationResult
 from app.graphql.types.training_run_type import TrainingRunType
+from app.graphql.types.export_artifact_type import ExportArtifactType
+from app.graphql.types.scoring_type import ArchitectureScoreType
+from app.graphql.types.template_type import ArchitectureTemplateType
+from app.graphql.types.model_artifact_type import ModelArtifactType
+from app.graphql.types.deployment_type import DeploymentType
+from app.graphql.types.deployment_metrics_type import DeploymentMetricsType
+from app.graphql.types.experiment_type import ExperimentType
+from app.graphql.types.dataset_version_type import DatasetVersionType
+from app.graphql.types.lineage_type import LineageType
 from app.auth.rbac import verify_role_and_ownership
 from app.services.audit_service import AuditService
 from app.models.audit_log import AuditLog
@@ -392,6 +402,381 @@ class Query:
                 created_at=log.created_at
             ) for log in logs
         ]
+
+    @strawberry.field
+    def score_architecture(self, info, project_id: strawberry.ID) -> ArchitectureScoreType:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.node import Node
+        from app.models.edge import Edge
+        nodes = db.query(Node).filter(Node.project_id == proj_uuid).all()
+        edges = db.query(Edge).filter(Edge.project_id == proj_uuid).all()
+
+        from app.services.architecture_scorer import ArchitectureScorer
+        score_data = ArchitectureScorer.score(nodes, edges)
+        return ArchitectureScoreType(
+            score=score_data["score"],
+            grade=score_data["grade"],
+            breakdown=score_data["breakdown"]
+        )
+
+    @strawberry.field
+    def recommend_architecture(self, info, project_id: strawberry.ID) -> List[AutoMLRecommendationType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.node import Node
+        from app.models.edge import Edge
+        nodes = db.query(Node).filter(Node.project_id == proj_uuid).all()
+        edges = db.query(Edge).filter(Edge.project_id == proj_uuid).all()
+
+        from app.services.recommendation_engine import RecommendationEngine
+        recommendations = RecommendationEngine.get_recommendations(nodes, edges)
+        return [
+            AutoMLRecommendationType(
+                severity=r["severity"],
+                bottleneck=r["bottleneck"],
+                recommended_action=r["recommended_action"]
+            ) for r in recommendations
+        ]
+
+    @strawberry.field
+    def generate_architecture_template(self, info, prompt: str) -> ArchitectureTemplateType:
+        user = info.context.current_user
+        if not user:
+            raise Exception("Not authenticated.")
+        
+        from app.services.template_generator import ArchitectureTemplateGenerator
+        template = ArchitectureTemplateGenerator.generate(prompt)
+        return ArchitectureTemplateType(
+            name=template["name"],
+            description=template["description"],
+            nodes=template["nodes"],
+            edges=template["edges"]
+        )
+
+    @strawberry.field
+    def model_artifacts(self, info, project_id: strawberry.ID) -> List[ModelArtifactType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.model_artifact import ModelArtifact
+        artifacts = db.query(ModelArtifact).filter(ModelArtifact.project_id == proj_uuid).all()
+        return [
+            ModelArtifactType(
+                id=art.id,
+                project_id=art.project_id,
+                training_run_id=art.training_run_id,
+                framework=art.framework,
+                artifact_type=art.artifact_type,
+                artifact_path=art.artifact_path,
+                checksum=art.checksum,
+                version=art.version,
+                created_at=art.created_at
+            ) for art in artifacts
+        ]
+
+    @strawberry.field
+    def model_artifact(self, info, id: strawberry.ID) -> ModelArtifactType | None:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            art_uuid = uuid.UUID(id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.model_artifact import ModelArtifact
+        art = db.query(ModelArtifact).filter(ModelArtifact.id == art_uuid).first()
+        if not art:
+            return None
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(art.project_id))
+
+        return ModelArtifactType(
+            id=art.id,
+            project_id=art.project_id,
+            training_run_id=art.training_run_id,
+            framework=art.framework,
+            artifact_type=art.artifact_type,
+            artifact_path=art.artifact_path,
+            checksum=art.checksum,
+            version=art.version,
+            created_at=art.created_at
+        )
+
+    @strawberry.field
+    def deployments(self, info, project_id: strawberry.ID) -> List[DeploymentType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.deployment import Deployment
+        deployments = db.query(Deployment).filter(Deployment.project_id == proj_uuid).all()
+        return [
+            DeploymentType(
+                id=d.id,
+                project_id=d.project_id,
+                model_artifact_id=d.model_artifact_id,
+                target=d.target,
+                status=d.status,
+                endpoint_url=d.endpoint_url,
+                created_at=d.created_at,
+                updated_at=d.updated_at
+            ) for d in deployments
+        ]
+
+    @strawberry.field
+    def deployment(self, info, id: strawberry.ID) -> DeploymentType | None:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            dep_uuid = uuid.UUID(id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.deployment import Deployment
+        d = db.query(Deployment).filter(Deployment.id == dep_uuid).first()
+        if not d:
+            return None
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(d.project_id))
+
+        return DeploymentType(
+            id=d.id,
+            project_id=d.project_id,
+            model_artifact_id=d.model_artifact_id,
+            target=d.target,
+            status=d.status,
+            endpoint_url=d.endpoint_url,
+            created_at=d.created_at,
+            updated_at=d.updated_at
+        )
+
+    @strawberry.field
+    def deployment_metrics(self, info, deployment_id: strawberry.ID) -> List[DeploymentMetricsType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            dep_uuid = uuid.UUID(deployment_id)
+        except ValueError:
+            raise Exception("Invalid deployment ID format.")
+
+        from app.models.deployment import Deployment
+        d = db.query(Deployment).filter(Deployment.id == dep_uuid).first()
+        if not d:
+            raise Exception("Deployment not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(d.project_id))
+
+        from app.models.deployment_metrics import DeploymentMetrics
+        metrics = db.query(DeploymentMetrics).filter(DeploymentMetrics.deployment_id == dep_uuid).order_by(DeploymentMetrics.timestamp.desc()).all()
+        return [
+            DeploymentMetricsType(
+                id=m.id,
+                deployment_id=m.deployment_id,
+                timestamp=m.timestamp,
+                requests_count=m.requests_count,
+                latency_ms=m.latency_ms,
+                error_count=m.error_count,
+                memory_mb=m.memory_mb,
+                gpu_usage_pct=m.gpu_usage_pct
+            ) for m in metrics
+        ]
+
+    @strawberry.field
+    def experiments(self, info, project_id: strawberry.ID) -> List[ExperimentType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.experiment import Experiment
+        experiments = db.query(Experiment).filter(Experiment.project_id == proj_uuid).all()
+        return [
+            ExperimentType(
+                id=e.id,
+                project_id=e.project_id,
+                name=e.name,
+                description=e.description,
+                created_at=e.created_at,
+                updated_at=e.updated_at
+            ) for e in experiments
+        ]
+
+    @strawberry.field
+    def experiment(self, info, id: strawberry.ID) -> ExperimentType | None:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            exp_uuid = uuid.UUID(id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.experiment import Experiment
+        e = db.query(Experiment).filter(Experiment.id == exp_uuid).first()
+        if not e:
+            return None
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(e.project_id))
+
+        return ExperimentType(
+            id=e.id,
+            project_id=e.project_id,
+            name=e.name,
+            description=e.description,
+            created_at=e.created_at,
+            updated_at=e.updated_at
+        )
+
+    @strawberry.field
+    def dataset_versions(self, info, dataset_id: strawberry.ID) -> List[DatasetVersionType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            ds_uuid = uuid.UUID(dataset_id)
+        except ValueError:
+            raise Exception("Invalid dataset ID format.")
+
+        from app.models.dataset import Dataset
+        dataset = db.query(Dataset).filter(Dataset.id == ds_uuid).first()
+        if not dataset:
+            raise Exception("Dataset not found.")
+
+        if user.role != "admin" and dataset.user_id != user.id:
+            raise Exception("Forbidden: You do not have permission to view versions for this dataset.")
+
+        from app.models.dataset_version import DatasetVersion
+        versions = db.query(DatasetVersion).filter(DatasetVersion.dataset_id == ds_uuid).order_by(DatasetVersion.created_at.desc()).all()
+        return [
+            DatasetVersionType(
+                id=v.id,
+                dataset_id=v.dataset_id,
+                version_number=v.version_number,
+                storage_path=v.storage_path,
+                row_count=v.row_count,
+                column_count=v.column_count,
+                metadata_json=v.metadata_json,
+                created_at=v.created_at
+            ) for v in versions
+        ]
+
+    @strawberry.field
+    def get_lineage(self, info, deployment_id: strawberry.ID) -> LineageType:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            dep_uuid = uuid.UUID(deployment_id)
+        except ValueError:
+            raise Exception("Invalid deployment ID format.")
+
+        from app.services.lineage_service import LineageService
+        lineage = LineageService.get_lineage(db, dep_uuid)
+        
+        d = lineage["deployment"]
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(d.project_id))
+
+        d_type = DeploymentType(
+            id=d.id,
+            project_id=d.project_id,
+            model_artifact_id=d.model_artifact_id,
+            target=d.target,
+            status=d.status,
+            endpoint_url=d.endpoint_url,
+            created_at=d.created_at,
+            updated_at=d.updated_at
+        )
+
+        art = lineage["model_artifact"]
+        art_type = ModelArtifactType(
+            id=art.id,
+            project_id=art.project_id,
+            training_run_id=art.training_run_id,
+            framework=art.framework,
+            artifact_type=art.artifact_type,
+            artifact_path=art.artifact_path,
+            checksum=art.checksum,
+            version=art.version,
+            created_at=art.created_at
+        )
+
+        run_type = None
+        run = lineage["training_run"]
+        if run:
+            run_type = TrainingRunType(
+                id=run.id,
+                project_id=run.project_id,
+                training_job_id=run.training_job_id,
+                accuracy=run.accuracy,
+                loss=run.loss,
+                metrics_json=run.metrics_json,
+                config_json=run.config_json,
+                created_at=run.created_at,
+                updated_at=run.updated_at
+            )
+
+        dataset_type = None
+        ds = lineage["dataset"]
+        if ds:
+            dataset_type = DatasetType(
+                id=ds.id,
+                user_id=ds.user_id,
+                project_id=ds.project_id,
+                name=ds.name,
+                description=ds.description,
+                dataset_type=ds.dataset_type,
+                status=ds.status,
+                file_path=ds.file_path,
+                num_records=ds.num_records,
+                schema_metadata=ds.schema_metadata,
+                storage_path=ds.storage_path,
+                row_count=ds.row_count,
+                column_count=ds.column_count,
+                metadata_json=ds.metadata_json,
+                created_at=ds.created_at,
+                updated_at=ds.updated_at
+            )
+
+        ver_type = None
+        ver = lineage["dataset_version"]
+        if ver:
+            ver_type = DatasetVersionType(
+                id=ver.id,
+                dataset_id=ver.dataset_id,
+                version_number=ver.version_number,
+                storage_path=ver.storage_path,
+                row_count=ver.row_count,
+                column_count=ver.column_count,
+                metadata_json=ver.metadata_json,
+                created_at=ver.created_at
+            )
+
+        return LineageType(
+            deployment=d_type,
+            model_artifact=art_type,
+            training_run=run_type,
+            dataset=dataset_type,
+            dataset_version=ver_type
+        )
+
+
 
 @strawberry.type
 class Mutation:
@@ -777,9 +1162,9 @@ class Mutation:
             GraphOptimizer.simplify_graph(ir_graph)
 
             # Generate PyTorch code
-            from app.codegen.pytorch_generator import PyTorchGenerator
-            compiler = PyTorchGenerator()
-            generated_code = compiler.compile(ir_graph)
+            from app.codegen.generators.registry import GeneratorRegistry
+            compiler = GeneratorRegistry.get_generator("PyTorch")
+            generated_code = compiler.generate(ir_graph)
             
             # Log Audit trail
             AuditService.log_action(
@@ -851,9 +1236,9 @@ class Mutation:
             GraphOptimizer.simplify_graph(ir_graph)
 
             # Generate PyTorch code
-            from app.codegen.pytorch.generator import PyTorchCompiler
-            compiler = PyTorchCompiler()
-            generated_code = compiler.compile(ir_graph)
+            from app.codegen.generators.registry import GeneratorRegistry
+            compiler = GeneratorRegistry.get_generator("PyTorch")
+            generated_code = compiler.generate(ir_graph)
             
             # Save to Cache
             CachingService.set(cache_key, generated_code, expire_seconds=3600)
@@ -928,9 +1313,9 @@ class Mutation:
             GraphOptimizer.simplify_graph(ir_graph)
 
             # Generate TensorFlow code
-            from app.codegen.tensorflow.compiler import TensorFlowCompiler
-            compiler = TensorFlowCompiler()
-            generated_code = compiler.compile(ir_graph)
+            from app.codegen.generators.registry import GeneratorRegistry
+            compiler = GeneratorRegistry.get_generator("TensorFlow")
+            generated_code = compiler.generate(ir_graph)
             
             # Save to Cache
             CachingService.set(cache_key, generated_code, expire_seconds=3600)
@@ -996,9 +1381,9 @@ class Mutation:
             from app.services.graph_engine import GraphOptimizer
             GraphOptimizer.simplify_graph(ir_graph)
 
-            from app.codegen.jax.compiler import JAXCompiler
-            compiler = JAXCompiler()
-            generated_code = compiler.compile(ir_graph)
+            from app.codegen.generators.registry import GeneratorRegistry
+            compiler = GeneratorRegistry.get_generator("JAX")
+            generated_code = compiler.generate(ir_graph)
             
             # Save to Cache
             CachingService.set(cache_key, generated_code, expire_seconds=3600)
@@ -1063,9 +1448,9 @@ class Mutation:
             from app.services.graph_engine import GraphOptimizer
             GraphOptimizer.simplify_graph(ir_graph)
 
-            from app.codegen.onnx.compiler import ONNXCompiler
-            compiler = ONNXCompiler()
-            generated_code = compiler.compile(ir_graph)
+            from app.codegen.generators.registry import GeneratorRegistry
+            compiler = GeneratorRegistry.get_generator("ONNX")
+            generated_code = compiler.generate(ir_graph)
             
             # Save to Cache
             CachingService.set(cache_key, generated_code, expire_seconds=3600)
@@ -1081,6 +1466,120 @@ class Mutation:
             return generated_code
         except Exception as e:
             raise Exception(str(e))
+
+    @strawberry.mutation
+    def export_onnx(
+        self,
+        project_id: strawberry.ID,
+        info
+    ) -> ExportArtifactType:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.project import Project
+        if user.role == "admin":
+            project = db.query(Project).filter(Project.id == proj_uuid).first()
+        else:
+            project = ProjectService.get_project(db, proj_uuid, user_id=user.id)
+            
+        if not project:
+            raise Exception("Project not found.")
+
+        from app.models.node import Node
+        from app.models.edge import Edge
+        nodes = db.query(Node).filter(Node.project_id == proj_uuid).all()
+        edges = db.query(Edge).filter(Edge.project_id == proj_uuid).all()
+
+        try:
+            from app.services.validation_service import ValidationService
+            sorted_nodes = ValidationService.validate_graph(nodes, edges)
+
+            from app.services.shape_inference_service import ShapeInferenceService
+            ShapeInferenceService.run_shape_inference(sorted_nodes, edges)
+            db.commit()
+
+            from app.ir.ir_graph import IRGraph
+            ir_graph = IRGraph.from_db(project, sorted_nodes, edges)
+            
+            from app.services.graph_engine import GraphOptimizer
+            GraphOptimizer.simplify_graph(ir_graph)
+
+            from app.codegen.generators.registry import GeneratorRegistry
+            compiler = GeneratorRegistry.get_generator("ONNX")
+            generated_code = compiler.generate(ir_graph)
+            
+            # Execute generated Python code to construct ONNX model
+            namespace = {}
+            exec(generated_code, namespace)
+            onnx_model = namespace["create_mlbuilder_onnx_model"]()
+
+            # Ensure export directory exists
+            import os
+            export_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "exports", str(project.id)))
+            os.makedirs(export_dir, exist_ok=True)
+            artifact_path = os.path.join(export_dir, "model.onnx")
+
+            # pyrefly: ignore [missing-import]
+            import onnx
+            onnx.save(onnx_model, artifact_path)
+
+            # Compute SHA256 checksum of generated model.onnx
+            import hashlib
+            sha256 = hashlib.sha256()
+            with open(artifact_path, "rb") as f:
+                while chunk := f.read(8192):
+                    sha256.update(chunk)
+            checksum = sha256.hexdigest()
+
+            # Record in Database
+            from app.models.export_artifact import ExportArtifact
+            from datetime import datetime
+            artifact = db.query(ExportArtifact).filter(
+                ExportArtifact.project_id == project.id,
+                ExportArtifact.framework == "ONNX"
+            ).first()
+
+            if not artifact:
+                artifact = ExportArtifact(
+                    id=uuid.uuid4(),
+                    project_id=project.id,
+                    framework="ONNX",
+                    artifact_path=artifact_path,
+                    checksum=checksum
+                )
+                db.add(artifact)
+            else:
+                artifact.artifact_path = artifact_path
+                artifact.checksum = checksum
+                artifact.created_at = datetime.utcnow()
+            db.commit()
+
+            # Log Audit trail
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="EXPORT_ONNX_MODEL",
+                resource_type="PROJECT",
+                resource_id=str(project.id),
+                ip_address=info.context.ip_address
+            )
+
+            return ExportArtifactType(
+                id=artifact.id,
+                project_id=artifact.project_id,
+                framework=artifact.framework,
+                artifact_path=artifact.artifact_path,
+                checksum=artifact.checksum,
+                created_at=artifact.created_at
+            )
+        except Exception as e:
+            db.rollback()
+            raise Exception(str(e))
+
 
     @strawberry.mutation
     def validate_project_compilation(
@@ -1148,24 +1647,11 @@ class Mutation:
                 from app.services.graph_engine import GraphOptimizer
                 GraphOptimizer.simplify_graph(ir_graph)
 
-                framework_str = project.framework.lower().strip()
-                if "pytorch" in framework_str or "torch" in framework_str:
-                    from app.codegen.pytorch.generator import PyTorchCompiler
-                    compiler = PyTorchCompiler()
-                    generated_code = compiler.compile(ir_graph)
-                elif "tensorflow" in framework_str or "keras" in framework_str:
-                    from app.codegen.tensorflow.compiler import TensorFlowCompiler
-                    compiler = TensorFlowCompiler()
-                    generated_code = compiler.compile(ir_graph)
-                elif "jax" in framework_str or "flax" in framework_str:
-                    from app.codegen.jax.compiler import JAXCompiler
-                    compiler = JAXCompiler()
-                    generated_code = compiler.compile(ir_graph)
-                elif "onnx" in framework_str:
-                    from app.codegen.onnx.compiler import ONNXCompiler
-                    compiler = ONNXCompiler()
-                    generated_code = compiler.compile(ir_graph)
-                else:
+                from app.codegen.generators.registry import GeneratorRegistry
+                try:
+                    compiler = GeneratorRegistry.get_generator(project.framework)
+                    generated_code = compiler.generate(ir_graph)
+                except ValueError:
                     generated_code = f"# Framework compiler for '{project.framework}' not supported."
 
                 # 3c. Sandbox Compilation Execution Verification
@@ -1568,9 +2054,9 @@ class Mutation:
             from app.services.graph_engine import GraphOptimizer
             GraphOptimizer.simplify_graph(ir_graph)
 
-            from app.codegen.pytorch.generator import PyTorchCompiler
-            compiler = PyTorchCompiler()
-            generated_code = compiler.compile(ir_graph)
+            from app.codegen.generators.registry import GeneratorRegistry
+            compiler = GeneratorRegistry.get_generator("PyTorch")
+            generated_code = compiler.generate(ir_graph)
 
             # Invoke sandboxed dynamic benchmarking
             from app.services.benchmarking_service import BenchmarkingService
@@ -1601,6 +2087,84 @@ class Mutation:
             return json.dumps(res)
         except Exception as e:
             raise Exception(str(e))
+
+    @strawberry.mutation
+    def apply_architecture_template(self, info, project_id: strawberry.ID, prompt: str) -> ProjectType:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.project import Project
+        from app.models.node import Node
+        from app.models.edge import Edge
+        project = db.query(Project).filter(Project.id == proj_uuid).first()
+        if not project:
+            raise Exception("Project not found.")
+
+        # 1. Clear existing nodes and edges
+        db.query(Node).filter(Node.project_id == proj_uuid).delete()
+        db.query(Edge).filter(Edge.project_id == proj_uuid).delete()
+
+        # 2. Generate template layout
+        from app.services.template_generator import ArchitectureTemplateGenerator
+        template = ArchitectureTemplateGenerator.generate(prompt)
+
+        # 3. Create new Node models
+        for n in template["nodes"]:
+            db_node = Node(
+                id=uuid.UUID(n["id"]),
+                project_id=proj_uuid,
+                type=n["type"],
+                label=n["label"],
+                config=n["config"],
+                position_x=n["position_x"],
+                position_y=n["position_y"],
+                input_shape=n["input_shape"],
+                output_shape=n["output_shape"]
+            )
+            db.add(db_node)
+
+        # 4. Create new Edge models
+        for e in template["edges"]:
+            db_edge = Edge(
+                id=uuid.UUID(e["id"]),
+                project_id=proj_uuid,
+                from_node_id=uuid.UUID(e["from_node_id"]),
+                to_node_id=uuid.UUID(e["to_node_id"]),
+                input_shape=e["input_shape"],
+                output_shape=e["output_shape"]
+            )
+            db.add(db_edge)
+
+        # Commit changes
+        db.commit()
+        db.refresh(project)
+
+        # Log Audit event
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="APPLY_TEMPLATE",
+            resource_type="PROJECT",
+            resource_id=str(proj_uuid),
+            details={"prompt": prompt, "template_name": template["name"]},
+            ip_address=info.context.ip_address
+        )
+
+        return ProjectType(
+            id=project.id,
+            user_id=project.user_id,
+            name=project.name,
+            description=project.description,
+            framework=project.framework,
+            is_public=project.is_public,
+            thumbnail_url=project.thumbnail_url,
+            created_at=project.created_at,
+            updated_at=project.updated_at
+        )
 
     @strawberry.mutation
     def update_user_role(self, info, user_id: strawberry.ID, role: str) -> UserType:
@@ -1643,6 +2207,314 @@ class Mutation:
             created_at=target_user.created_at,
             updated_at=target_user.updated_at
         )
+
+    @strawberry.mutation
+    def deploy_model(self, info, artifact_id: strawberry.ID, target: str) -> DeploymentType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            art_uuid = uuid.UUID(artifact_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.model_artifact import ModelArtifact
+        artifact = db.query(ModelArtifact).filter(ModelArtifact.id == art_uuid).first()
+        if not artifact:
+            raise Exception("Model artifact not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=str(artifact.project_id))
+
+        from app.services.deployment_service import DeploymentService
+        d = DeploymentService.deploy_artifact(db, art_uuid, target)
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="DEPLOY_MODEL",
+            resource_type="DEPLOYMENT",
+            resource_id=str(d.id),
+            details={"artifact_id": artifact_id, "target": target},
+            ip_address=info.context.ip_address
+        )
+
+        return DeploymentType(
+            id=d.id,
+            project_id=d.project_id,
+            model_artifact_id=d.model_artifact_id,
+            target=d.target,
+            status=d.status,
+            endpoint_url=d.endpoint_url,
+            created_at=d.created_at,
+            updated_at=d.updated_at
+        )
+
+    @strawberry.mutation
+    def predict_deployment(self, info, deployment_id: strawberry.ID, input_data: strawberry.scalars.JSON) -> strawberry.scalars.JSON:
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            dep_uuid = uuid.UUID(deployment_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.deployment import Deployment
+        d = db.query(Deployment).filter(Deployment.id == dep_uuid).first()
+        if not d:
+            raise Exception("Deployment not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(d.project_id))
+
+        if d.status != "ACTIVE":
+            raise Exception(f"Deployment is not ACTIVE. Current status: {d.status}")
+
+        import time
+        start_time = time.perf_counter()
+        has_error = False
+        try:
+            from app.services.inference_service import InferenceService
+            result = InferenceService.execute_prediction(db, d.model_artifact_id, input_data)
+        except Exception as e:
+            has_error = True
+            raise Exception(str(e))
+        finally:
+            latency_ms = (time.perf_counter() - start_time) * 1000.0
+            from app.services.deployment_service import DeploymentService
+            DeploymentService.record_metrics(db, d.id, latency_ms, has_error)
+
+        return result
+
+    @strawberry.mutation
+    def export_deployment_package(self, info, artifact_id: strawberry.ID) -> str:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            art_uuid = uuid.UUID(artifact_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.model_artifact import ModelArtifact
+        artifact = db.query(ModelArtifact).filter(ModelArtifact.id == art_uuid).first()
+        if not artifact:
+            raise Exception("Model artifact not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=str(artifact.project_id))
+
+        from app.services.deployment_service import DeploymentService
+        zip_url = DeploymentService.export_prediction_package(db, art_uuid)
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="EXPORT_DEPLOYMENT_PACKAGE",
+            resource_type="MODEL_ARTIFACT",
+            resource_id=artifact_id,
+            ip_address=info.context.ip_address
+        )
+
+        return zip_url
+
+    @strawberry.mutation
+    def create_experiment(self, info, project_id: strawberry.ID, name: str, description: str | None = None) -> ExperimentType:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.experiment import Experiment
+        experiment = Experiment(
+            id=uuid.uuid4(),
+            project_id=proj_uuid,
+            name=name,
+            description=description,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(experiment)
+        db.commit()
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="CREATE_EXPERIMENT",
+            resource_type="EXPERIMENT",
+            resource_id=str(experiment.id),
+            details={"name": name},
+            ip_address=info.context.ip_address
+        )
+
+        return ExperimentType(
+            id=experiment.id,
+            project_id=experiment.project_id,
+            name=experiment.name,
+            description=experiment.description,
+            created_at=experiment.created_at,
+            updated_at=experiment.updated_at
+        )
+
+    @strawberry.mutation
+    def create_dataset_version(
+        self, 
+        info, 
+        dataset_id: strawberry.ID, 
+        version_number: str, 
+        storage_path: str,
+        row_count: int = 0,
+        column_count: int = 0,
+        metadata_json: strawberry.scalars.JSON | None = None
+    ) -> DatasetVersionType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            ds_uuid = uuid.UUID(dataset_id)
+        except ValueError:
+            raise Exception("Invalid dataset ID format.")
+
+        from app.models.dataset import Dataset
+        dataset = db.query(Dataset).filter(Dataset.id == ds_uuid).first()
+        if not dataset:
+            raise Exception("Dataset not found.")
+
+        if user.role != "admin" and dataset.user_id != user.id:
+            raise Exception("Forbidden: You do not have permission to version this dataset.")
+
+        from app.models.dataset_version import DatasetVersion
+        version = DatasetVersion(
+            id=uuid.uuid4(),
+            dataset_id=ds_uuid,
+            version_number=version_number,
+            storage_path=storage_path,
+            row_count=row_count,
+            column_count=column_count,
+            metadata_json=metadata_json,
+            created_at=datetime.utcnow()
+        )
+        db.add(version)
+        
+        # update dataset metadata
+        dataset.storage_path = storage_path
+        dataset.row_count = row_count
+        dataset.column_count = column_count
+        if metadata_json:
+            dataset.metadata_json = metadata_json
+        dataset.status = "READY"
+        
+        db.commit()
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="CREATE_DATASET_VERSION",
+            resource_type="DATASET_VERSION",
+            resource_id=str(version.id),
+            details={"version_number": version_number},
+            ip_address=info.context.ip_address
+        )
+
+        return DatasetVersionType(
+            id=version.id,
+            dataset_id=version.dataset_id,
+            version_number=version.version_number,
+            storage_path=version.storage_path,
+            row_count=version.row_count,
+            column_count=version.column_count,
+            metadata_json=version.metadata_json,
+            created_at=version.created_at
+        )
+
+    @strawberry.mutation
+    def add_run_to_experiment(self, info, experiment_id: strawberry.ID, run_id: strawberry.ID) -> TrainingRunType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            exp_uuid = uuid.UUID(experiment_id)
+            run_uuid = uuid.UUID(run_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.experiment import Experiment
+        from app.models.training_run import TrainingRun
+        
+        experiment = db.query(Experiment).filter(Experiment.id == exp_uuid).first()
+        if not experiment:
+            raise Exception("Experiment not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=str(experiment.project_id))
+
+        run = db.query(TrainingRun).filter(TrainingRun.id == run_uuid).first()
+        if not run:
+            raise Exception("Training run not found.")
+
+        if run.project_id != experiment.project_id:
+            raise Exception("Cannot group a run from a different project into this experiment.")
+
+        run.experiment_id = experiment.id
+        db.commit()
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="ADD_RUN_TO_EXPERIMENT",
+            resource_type="TRAINING_RUN",
+            resource_id=str(run.id),
+            details={"experiment_id": experiment_id},
+            ip_address=info.context.ip_address
+        )
+
+        return TrainingRunType(
+            id=run.id,
+            project_id=run.project_id,
+            training_job_id=run.training_job_id,
+            accuracy=run.accuracy,
+            loss=run.loss,
+            metrics_json=run.metrics_json,
+            config_json=run.config_json,
+            created_at=run.created_at,
+            updated_at=run.updated_at
+        )
+
+    @strawberry.mutation
+    def rollback_deployment(self, info, deployment_id: strawberry.ID, target_version: str) -> DeploymentType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            dep_uuid = uuid.UUID(deployment_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.deployment import Deployment
+        d = db.query(Deployment).filter(Deployment.id == dep_uuid).first()
+        if not d:
+            raise Exception("Deployment not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=str(d.project_id))
+
+        from app.services.deployment_service import DeploymentService
+        d_rolled = DeploymentService.rollback_deployment(db, dep_uuid, target_version)
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="ROLLBACK_DEPLOYMENT",
+            resource_type="DEPLOYMENT",
+            resource_id=str(d_rolled.id),
+            details={"target_version": target_version},
+            ip_address=info.context.ip_address
+        )
+
+        return DeploymentType(
+            id=d_rolled.id,
+            project_id=d_rolled.project_id,
+            model_artifact_id=d_rolled.model_artifact_id,
+            target=d_rolled.target,
+            status=d_rolled.status,
+            endpoint_url=d_rolled.endpoint_url,
+            created_at=d_rolled.created_at,
+            updated_at=d_rolled.updated_at
+        )
+
+
 
 # Import custom GraphQL security extensions
 from app.graphql.extensions.depth_limiter import GraphQLDepthLimiter

@@ -4,11 +4,17 @@ from jinja2 import Environment, FileSystemLoader
 from typing import List, Dict, Any
 
 from app.codegen.base_compiler import BaseCompiler
+from app.codegen.generators.registry import BaseGenerator
 from app.ir.ir_graph import IRGraph
 from app.ir.ir_node import IRNode
 
-class ONNXCompiler(BaseCompiler):
+class ONNXCompiler(BaseGenerator, BaseCompiler):
     """ONNX code generator compiling framework-agnostic IRGraph definitions into runnable ONNX helper scripts."""
+
+    def generate(self, ir_graph: IRGraph) -> str:
+        """Generates ONNX helper python code conforming to the BaseGenerator contract."""
+        return self.compile(ir_graph)
+
 
     @staticmethod
     def clean_variable_name(label: str) -> str:
@@ -152,7 +158,10 @@ class ONNXCompiler(BaseCompiler):
     )
     onnx_nodes.append(node_act_{var_name})""")
 
-            elif op_type in ("maxpool2d", "avgpool", "avgpool2d"):
+            elif op_type in (
+                "maxpool", "maxpool2d", "maxpooling2d", "max_pooling2d",
+                "avgpool", "avgpool2d", "avgpooling2d", "avg_pooling2d"
+            ):
                 pool_size = params.get("pool_size", 2)
                 stride = params.get("stride", pool_size)
                 
@@ -317,15 +326,14 @@ class ONNXCompiler(BaseCompiler):
     onnx_nodes.append(node_{var_name})""")
 
             elif op_type == "dropout":
-                rate = params.get("rate")
-                if rate is None:
-                    rate = params.get("p", 0.5)
-                helper_nodes.append(f"""    # Dropout: {var_name}
+                # ONNX opset 13: Dropout outputs (output, mask). ratio is an optional input, not an attribute.
+                # For inference export we emit a single-output Dropout node (training=False, ratio passed as input).
+                # Simplest cross-opset approach: use Identity to preserve the data flow in inference mode.
+                helper_nodes.append(f"""    # Dropout (inference-mode Identity): {var_name}
     node_{var_name} = helper.make_node(
-        "Dropout",
+        "Identity",
         inputs=["{input_arg}"],
-        outputs=["{var_name}"],
-        ratio={rate}
+        outputs=["{var_name}"]
     )
     onnx_nodes.append(node_{var_name})""")
 

@@ -1,5 +1,11 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models.user import User
+    from app.models.node import Node
+    from app.models.edge import Edge
 from sqlalchemy import String, Text, ForeignKey, Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.config.database import Base

@@ -1,3 +1,4 @@
+from app.services.graph_engine import GraphOptimizer
 import os
 import sys
 import uuid
@@ -24,8 +25,7 @@ from app.services.event_dispatcher import EventDispatcher
 from app.services.validation_service import ValidationService
 from app.services.shape_inference_service import ShapeInferenceService
 from app.ir.ir_graph import IRGraph
-from app.services.graph_engine import GraphOptimizer
-from app.codegen.pytorch.generator import PyTorchCompiler
+from app.codegen.generators.registry import GeneratorRegistry
 from app.config.logging import training_logger
 
 logger = training_logger
@@ -290,8 +290,8 @@ class TrainingService:
             # Simplify & Compile
             ir_graph = IRGraph.from_db(project, sorted_nodes, edges)
             GraphOptimizer.simplify_graph(ir_graph)
-            compiler = PyTorchCompiler()
-            generated_code = compiler.compile(ir_graph)
+            compiler = GeneratorRegistry.get_generator("PyTorch")
+            generated_code = compiler.generate(ir_graph)
 
             # 2. Load Dataset & Create DataLoader
             dataloader = None
@@ -435,6 +435,42 @@ class TrainingService:
             )
             db.add(run)
             db.commit()
+
+            # Save state dict / weights to ModelArtifact Registry (Phase 4.1)
+            try:
+                import hashlib
+                from datetime import datetime
+                from app.models.model_artifact import ModelArtifact
+                
+                exports_artifacts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "exports", "artifacts"))
+                os.makedirs(exports_artifacts_dir, exist_ok=True)
+                weights_filename = f"{run.id}_weights.pt"
+                weights_filepath = os.path.join(exports_artifacts_dir, weights_filename)
+                
+                # Save PyTorch state dict
+                torch.save(model.state_dict(), weights_filepath)
+                
+                # Compute checksum
+                with open(weights_filepath, "rb") as f:
+                    checksum = hashlib.sha256(f.read()).hexdigest()
+                
+                artifact = ModelArtifact(
+                    id=uuid.uuid4(),
+                    project_id=project_id,
+                    training_run_id=run.id,
+                    framework=project.framework or "PyTorch",
+                    artifact_type="PyTorch Weights",
+                    artifact_path=weights_filepath,
+                    checksum=checksum,
+                    version="1.0.0",
+                    created_at=datetime.utcnow()
+                )
+                db.add(artifact)
+                db.commit()
+                logger.info(f"Registered ModelArtifact: {artifact.id} for run: {run.id}")
+            except Exception as artifact_err:
+                logger.error(f"Failed to auto-register model artifact: {artifact_err}", exc_info=True)
+
 
             # Publish completed event
             EventDispatcher.get_redis().publish(

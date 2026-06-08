@@ -4,10 +4,14 @@ from jinja2 import Environment, FileSystemLoader
 from typing import List, Dict, Any
 
 from app.codegen.base_compiler import BaseCompiler
+from app.codegen.generators.registry import BaseGenerator
 from app.ir.ir_graph import IRGraph
 from app.ir.ir_node import IRNode
 
-class TensorFlowCompiler(BaseCompiler):
+class TensorFlowCompiler(BaseGenerator, BaseCompiler):
+    def generate(self, ir_graph: IRGraph) -> str:
+        """Generates TensorFlow/Keras code conforming to the BaseGenerator contract."""
+        return self.compile(ir_graph)
     """TensorFlow Keras Functional API code generator compiling framework-agnostic IRGraph definitions into runnable models."""
 
     @staticmethod
@@ -224,6 +228,11 @@ class TensorFlowCompiler(BaseCompiler):
                 is_custom_call = True
                 axes = params.get("axes") or params.get("dims", [0, 2, 1, 3])
                 custom_call_str = f"{var_name} = tf.transpose({input_arg_str}, perm={axes})"
+            elif op_type == "dropout":
+                rate = params.get("rate")
+                if rate is None:
+                    rate = params.get("p", 0.5)
+                keras_def = f"layers.Dropout(rate={rate})"
             else:
                 keras_def = "layers.Activation('linear')"
 
