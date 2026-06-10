@@ -13,10 +13,14 @@ from app.models.deployment_metrics import DeploymentMetrics
 from app.models.experiment import Experiment
 from app.models.dataset_version import DatasetVersion
 
+from app.models.registered_model import RegisteredModel
+from app.models.model_version import ModelVersion
+
 __all__ = [
     "User", "Project", "Node", "Edge", "Dataset", "TrainingJob",
     "AuditLog", "TrainingRun", "ExportArtifact", "ModelArtifact",
-    "Deployment", "DeploymentMetrics", "Experiment", "DatasetVersion"
+    "Deployment", "DeploymentMetrics", "Experiment", "DatasetVersion",
+    "RegisteredModel", "ModelVersion"
 ]
 
 

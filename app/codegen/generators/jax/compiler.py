@@ -158,14 +158,33 @@ class JAXCompiler(BaseGenerator, BaseCompiler):
             elif op_type in ("batchnorm", "batchnorm2d"):
                 custom_forward = f"{var_name} = nn.BatchNorm()({input_arg})"
 
-            elif op_type in ("lstm", "gru", "rnn", "bidirectional"):
+            elif op_type == "positional_encoding":
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[2] if node.input_shape and len(node.input_shape) > 2 else 128)
+                max_len = params.get("max_len", 1000)
+                custom_forward = f"{var_name}_pe = self.param('{var_name}_pe', nn.initializers.normal(), (1, {max_len}, {embed_dim}))\n        {var_name} = {input_arg} + {var_name}_pe[:, :{input_arg}.shape[1]]"
+
+            elif op_type in ("layernorm", "layer_norm"):
+                custom_forward = f"{var_name} = nn.LayerNorm()({input_arg})"
+
+            elif op_type in ("lstm", "gru", "rnn"):
                 # Flax RNNs require a stateful API or Cell wrappers.
-                # For code generation, we emit a functional mapping of nn.OptimizedLSTM/nn.GRUCell
+                # For code generation, we emit a functional mapping of nn.OptimizedLSTM/nn.GRUCell/nn.SimpleCell
                 units = int(params.get("hidden_size") or params.get("units", 64))
-                rnn_class = "OptimizedLSTM" if op_type == "lstm" or op_type == "bidirectional" else "GRUCell"
+                rnn_class = "OptimizedLSTM" if op_type == "lstm" else ("GRUCell" if op_type == "gru" else "SimpleCell")
                 
                 # Dynamic shape tracking helper
                 custom_forward = f"# Stateful recurrent layer mapping\n        {var_name}_layer = nn.{rnn_class}(features={units})\n        {var_name}, _ = {var_name}_layer({input_arg})"
+
+            elif op_type == "bilstm":
+                units = int(params.get("hidden_size") or params.get("units", 64))
+                custom_forward = (
+                    f"# Bidirectional LSTM mapping\n"
+                    f"        fw_cell_{var_name} = nn.OptimizedLSTM(features={units})\n"
+                    f"        bw_cell_{var_name} = nn.OptimizedLSTM(features={units})\n"
+                    f"        {var_name}_fw, _ = fw_cell_{var_name}({input_arg})\n"
+                    f"        {var_name}_bw, _ = bw_cell_{var_name}({input_arg})\n"
+                    f"        {var_name} = jnp.concatenate([{var_name}_fw, {var_name}_bw], axis=-1)"
+                )
 
             elif op_type == "dropout":
                 rate = params.get("rate")
@@ -173,7 +192,7 @@ class JAXCompiler(BaseGenerator, BaseCompiler):
                     rate = params.get("p", 0.5)
                 custom_forward = f"{var_name} = nn.Dropout(rate={rate}, deterministic=True)({input_arg})"
 
-            elif op_type in ("multiheadattention", "mha"):
+            elif op_type in ("multiheadattention", "mha", "attention"):
                 num_heads = int(params.get("num_heads", 8))
                 parents = [node_vars[pid] for pid in node.inputs]
                 if len(parents) == 3:
@@ -182,6 +201,64 @@ class JAXCompiler(BaseGenerator, BaseCompiler):
                     custom_forward = f"{var_name} = nn.MultiHeadDotProductAttention(num_heads={num_heads})({parents[0]}, {parents[1]})"
                 else:
                     custom_forward = f"{var_name} = nn.MultiHeadDotProductAttention(num_heads={num_heads})({input_arg})"
+
+            elif op_type == "residual_add":
+                parents_vars = [node_vars[pid] for pid in node.inputs]
+                sum_arg = " + ".join(parents_vars)
+                custom_forward = f"{var_name} = {sum_arg}"
+
+            elif op_type in ("transformer_block", "encoder_block"):
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[2] if node.input_shape and len(node.input_shape) > 2 else 128)
+                num_heads = int(params.get("num_heads", 8))
+                custom_forward = (
+                    f"# Transformer Encoder Block\n"
+                    f"        mha_{var_name} = nn.MultiHeadDotProductAttention(num_heads={num_heads})({input_arg})\n"
+                    f"        norm1_{var_name} = nn.LayerNorm()({input_arg} + mha_{var_name})\n"
+                    f"        ffn1_{var_name} = nn.Dense(features={embed_dim} * 4)(norm1_{var_name})\n"
+                    f"        ffn2_{var_name} = nn.Dense(features={embed_dim})(nn.relu(ffn1_{var_name}))\n"
+                    f"        {var_name} = nn.LayerNorm()(norm1_{var_name} + ffn2_{var_name})"
+                )
+
+            elif op_type == "decoder_block":
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[0][2] if node.input_shape and isinstance(node.input_shape[0], list) and len(node.input_shape[0]) > 2 else 128)
+                num_heads = int(params.get("num_heads", 8))
+                parents = [node_vars[pid] for pid in node.inputs]
+                target = parents[0] if len(parents) >= 1 else input_arg
+                memory = parents[1] if len(parents) >= 2 else target
+                custom_forward = (
+                    f"# Transformer Decoder Block\n"
+                    f"        self_attn_{var_name} = nn.MultiHeadDotProductAttention(num_heads={num_heads})({target})\n"
+                    f"        norm1_{var_name} = nn.LayerNorm()({target} + self_attn_{var_name})\n"
+                    f"        cross_attn_{var_name} = nn.MultiHeadDotProductAttention(num_heads={num_heads})(norm1_{var_name}, {memory})\n"
+                    f"        norm2_{var_name} = nn.LayerNorm()(norm1_{var_name} + cross_attn_{var_name})\n"
+                    f"        ffn1_{var_name} = nn.Dense(features={embed_dim} * 4)(norm2_{var_name})\n"
+                    f"        ffn2_{var_name} = nn.Dense(features={embed_dim})(nn.relu(ffn1_{var_name}))\n"
+                    f"        {var_name} = nn.LayerNorm()(norm2_{var_name} + ffn2_{var_name})"
+                )
+
+            elif op_type == "gcn":
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_forward = f"{var_name}_linear = nn.Dense(features={out_features})({parents[0]})\n        {var_name} = jnp.matmul({parents[1]}, {var_name}_linear)"
+                else:
+                    custom_forward = f"{var_name} = nn.Dense(features={out_features})({input_arg})"
+
+            elif op_type == "graph_sage":
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_forward = f"neigh_{var_name} = jnp.matmul({parents[1]}, {parents[0]})\n        sage_self_{var_name} = nn.Dense(features={out_features})({parents[0]})\n        sage_neigh_{var_name} = nn.Dense(features={out_features})(neigh_{var_name})\n        {var_name} = sage_self_{var_name} + sage_neigh_{var_name}"
+                else:
+                    custom_forward = f"{var_name} = nn.Dense(features={out_features})({input_arg})"
+
+            elif op_type == "gat":
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_forward = f"{var_name}_linear = nn.Dense(features={out_features})({parents[0]})\n        {var_name} = jnp.matmul({parents[1]}, {var_name}_linear)"
+                else:
+                    custom_forward = f"{var_name} = nn.Dense(features={out_features})({input_arg})"
 
             elif op_type == "add":
                 parents_vars = [node_vars[pid] for pid in node.inputs]

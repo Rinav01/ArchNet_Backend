@@ -168,7 +168,13 @@ def build_layer(op_type: str, label: str, params: Dict[str, Any], input_shape: A
         init_str = f"nn.Embedding(num_embeddings={vocab_size}, embedding_dim={embed_dim})"
         forward_str = f"{var_name} = self.{var_name}({input_arg})"
 
-    elif op_lower in ("multiheadattention", "mha"):
+    elif op_lower == "positional_encoding":
+        embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (input_shape[2] if input_shape and len(input_shape) > 2 else 128)
+        max_len = params.get("max_len", 1000)
+        init_str = f"nn.Parameter(torch.randn(1, {max_len}, {embed_dim}))"
+        forward_str = f"{var_name} = {input_arg} + self.{var_name}[:, :{input_arg}.size(1)]"
+
+    elif op_lower in ("multiheadattention", "mha", "attention"):
         embed_dim = params.get("embed_dim") or params.get("key_dim") or params.get("embedding_dim")
         if embed_dim is not None:
             embed_dim = int(embed_dim)
@@ -185,6 +191,69 @@ def build_layer(op_type: str, label: str, params: Dict[str, Any], input_shape: A
             forward_str = f"{var_name}, _ = self.{var_name}({parents[0]}, {parents[1]}, {parents[1]})"
         else:
             forward_str = f"{var_name}, _ = self.{var_name}({input_arg}, {input_arg}, {input_arg})"
+
+    elif op_lower == "residual_add":
+        is_tensor_op = True
+        parents = [node_vars.get(pid, "x") for pid in inputs]
+        forward_str = f"{var_name} = {' + '.join(parents)}"
+
+    elif op_lower in ("transformer_block", "encoder_block"):
+        embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (input_shape[2] if input_shape and len(input_shape) > 2 else 128)
+        num_heads = int(params.get("num_heads", 8))
+        init_str = f"nn.TransformerEncoderLayer(d_model={embed_dim}, nhead={num_heads}, batch_first=True)"
+        forward_str = f"{var_name} = self.{var_name}({input_arg})"
+
+    elif op_lower == "decoder_block":
+        embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (input_shape[0][2] if input_shape and isinstance(input_shape[0], list) and len(input_shape[0]) > 2 else 128)
+        num_heads = int(params.get("num_heads", 8))
+        init_str = f"nn.TransformerDecoderLayer(d_model={embed_dim}, nhead={num_heads}, batch_first=True)"
+        parents = [node_vars.get(pid, "x") for pid in inputs]
+        if len(parents) >= 2:
+            forward_str = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+        else:
+            forward_str = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
+
+    elif op_lower == "bilstm":
+        in_features = input_shape[2] if input_shape and len(input_shape) > 2 else 64
+        hidden_size = int(params.get("hidden_size") or params.get("units", 64))
+        num_layers = int(params.get("num_layers", 1))
+        init_str = f"nn.LSTM(input_size={in_features}, hidden_size={hidden_size}, num_layers={num_layers}, batch_first=True, bidirectional=True)"
+        return_sequences = bool(params.get("return_sequences", True))
+        if return_sequences:
+            forward_str = f"{var_name}, _ = self.{var_name}({input_arg})"
+        else:
+            forward_str = f"_, (hn, _) = self.{var_name}({input_arg})\n        {var_name} = torch.cat((hn[-2], hn[-1]), dim=-1)"
+
+    elif op_lower == "gcn":
+        in_features = input_shape[0][-1] if isinstance(input_shape[0], list) else (input_shape[-1] if input_shape else 64)
+        out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+        init_str = f"GCNConv(in_channels={in_features}, out_channels={out_features})"
+        parents = [node_vars.get(pid, "x") for pid in inputs]
+        if len(parents) >= 2:
+            forward_str = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+        else:
+            forward_str = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
+
+    elif op_lower == "graph_sage":
+        in_features = input_shape[0][-1] if isinstance(input_shape[0], list) else (input_shape[-1] if input_shape else 64)
+        out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+        init_str = f"SAGEConv(in_channels={in_features}, out_channels={out_features})"
+        parents = [node_vars.get(pid, "x") for pid in inputs]
+        if len(parents) >= 2:
+            forward_str = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+        else:
+            forward_str = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
+
+    elif op_lower == "gat":
+        in_features = input_shape[0][-1] if isinstance(input_shape[0], list) else (input_shape[-1] if input_shape else 64)
+        out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+        heads = int(params.get("num_heads", 1))
+        init_str = f"GATConv(in_channels={in_features}, out_channels={out_features}, heads={heads})"
+        parents = [node_vars.get(pid, "x") for pid in inputs]
+        if len(parents) >= 2:
+            forward_str = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+        else:
+            forward_str = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
 
     elif op_lower == "add":
         is_tensor_op = True

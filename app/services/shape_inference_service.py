@@ -63,6 +63,11 @@ class ShapeInferenceService:
 
     @staticmethod
     def infer_node_shape(node: Node, input_shapes: List[List[Any]]) -> List[Any]:
+        from app.services.shape_inference_v2 import ShapeInferenceServiceV2
+        return ShapeInferenceServiceV2.infer_node_shape(node, input_shapes)
+
+    @staticmethod
+    def infer_legacy_node_shape(node: Node, input_shapes: List[List[Any]]) -> List[Any]:
         """Calculates the output shape for a single node based on its type, config, and incoming shapes list.
         Fully supports symbolic dynamic shapes and broadcasting rules.
         """
@@ -412,54 +417,5 @@ class ShapeInferenceService:
         """Traverses the sorted graph DAG and updates the input_shape and output_shape columns of each Node in place.
         Supports multi-input nodes like Add and Concatenate.
         """
-        if not sorted_nodes:
-            return
-
-        # Mapping node ID -> resolved output shape
-        node_output_shapes: Dict[uuid.UUID, List[Any]] = {}
-
-        # Build adjacency maps
-        incoming_edges_map: Dict[uuid.UUID, List[Edge]] = {n.id: [] for n in sorted_nodes}
-        for edge in edges:
-            if edge.to_node_id in incoming_edges_map:
-                incoming_edges_map[edge.to_node_id].append(edge)
-
-        for node in sorted_nodes:
-            if node.type.lower() == "input":
-                node.input_shape = None
-                out_shape = cls.infer_node_shape(node, [[None]])
-                node.output_shape = out_shape
-                node_output_shapes[node.id] = out_shape
-            else:
-                incoming = incoming_edges_map[node.id]
-                if not incoming:
-                    raise ValueError(f"Layer '{node.label}' has no incoming connections and is not an 'Input' layer.")
-
-                # Gather output shapes from all predecessor nodes
-                parent_shapes = []
-                for edge in incoming:
-                    parent_shape = node_output_shapes.get(edge.from_node_id)
-                    if not parent_shape:
-                        raise ValueError(
-                            f"Input shape from parent '{edge.from_node_id}' for layer '{node.label}' was not yet computed. "
-                            "Verify topological order or cyclic connections."
-                        )
-                    parent_shapes.append(parent_shape)
-                    
-                    # Update shape metadata on the edge
-                    edge.input_shape = parent_shape
-
-                # If single input, store flat list. Otherwise, store as list of shapes
-                if len(parent_shapes) == 1:
-                    node.input_shape = parent_shapes[0]
-                else:
-                    node.input_shape = parent_shapes
-
-                # Run math inference
-                out_shape = cls.infer_node_shape(node, parent_shapes)
-                node.output_shape = out_shape
-                node_output_shapes[node.id] = out_shape
-
-                # Update outputs on the edge
-                for edge in incoming:
-                    edge.output_shape = out_shape
+        from app.services.shape_inference_v2 import ShapeInferenceServiceV2
+        return ShapeInferenceServiceV2.run_shape_inference(sorted_nodes, edges)

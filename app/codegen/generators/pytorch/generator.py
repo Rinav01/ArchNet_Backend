@@ -104,7 +104,10 @@ class PyTorchCompiler(BaseGenerator, BaseCompiler):
                 input_arg = node_vars[node.inputs[0]]
             else:
                 parents = [node_vars[pid] for pid in node.inputs]
-                input_arg = ", ".join(parents)
+                if op_type in ("multiheadattention", "mha", "attention", "decoder_block", "residual_add", "concatenate"):
+                    input_arg = ", ".join(parents)
+                else:
+                    input_arg = f"torch.cat([{', '.join(parents)}], dim=1)"
 
             is_tensor_op = False
             custom_forward = None
@@ -222,13 +225,20 @@ class PyTorchCompiler(BaseGenerator, BaseCompiler):
                 embed_dim = int(params.get("embedding_dim") or params.get("output_dim", 128))
                 init_str = f"nn.Embedding(num_embeddings={vocab_size}, embedding_dim={embed_dim})"
 
+            # ── Positional Encoding ───────────────────────────────────────────
+            elif op_type == "positional_encoding":
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[2] if node.input_shape and len(node.input_shape) > 2 else 128)
+                max_len = params.get("max_len", 1000)
+                init_str = f"nn.Parameter(torch.randn(1, {max_len}, {embed_dim}))"
+                custom_forward = f"{var_name} = {input_arg} + self.{var_name}[:, :{input_arg}.size(1)]"
+
             # ── LayerNorm ─────────────────────────────────────────────────────
-            elif op_type == "layernorm":
+            elif op_type in ("layernorm", "layer_norm"):
                 normalized_shape = node.input_shape[1:] if node.input_shape else [64]
                 init_str = f"nn.LayerNorm(normalized_shape={normalized_shape})"
 
-            # ── MultiheadAttention ────────────────────────────────────────────
-            elif op_type in ("multiheadattention", "mha"):
+            # ── MultiheadAttention / Attention ────────────────────────────────
+            elif op_type in ("multiheadattention", "mha", "attention"):
                 embed_dim = params.get("embed_dim") or params.get("key_dim") or params.get("embedding_dim")
                 if embed_dim is not None:
                     embed_dim = int(embed_dim)
@@ -251,6 +261,76 @@ class PyTorchCompiler(BaseGenerator, BaseCompiler):
                     custom_forward = f"{var_name}, _ = self.{var_name}({parents[0]}, {parents[1]}, {parents[1]})"
                 else:
                     custom_forward = f"{var_name}, _ = self.{var_name}({input_arg}, {input_arg}, {input_arg})"
+
+            # ── Residual Add ──────────────────────────────────────────────────
+            elif op_type == "residual_add":
+                is_tensor_op = True
+                parents = [node_vars[pid] for pid in node.inputs]
+                custom_forward = f"{var_name} = {' + '.join(parents)}"
+
+            # ── Transformer Block / Encoder Block ─────────────────────────────
+            elif op_type in ("transformer_block", "encoder_block"):
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[2] if node.input_shape and len(node.input_shape) > 2 else 128)
+                num_heads = int(params.get("num_heads", 8))
+                init_str = f"nn.TransformerEncoderLayer(d_model={embed_dim}, nhead={num_heads}, batch_first=True)"
+
+            # ── Decoder Block ──────────────────────────────────────────────────
+            elif op_type == "decoder_block":
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[0][2] if node.input_shape and isinstance(node.input_shape[0], list) and len(node.input_shape[0]) > 2 else 128)
+                num_heads = int(params.get("num_heads", 8))
+                init_str = f"nn.TransformerDecoderLayer(d_model={embed_dim}, nhead={num_heads}, batch_first=True)"
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_forward = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+                else:
+                    custom_forward = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
+
+            # ── Bidirectional LSTM (BiLSTM) ───────────────────────────────────
+            elif op_type == "bilstm":
+                in_features = node.input_shape[2] if node.input_shape and len(node.input_shape) > 2 else 64
+                hidden_size = int(params.get("hidden_size") or params.get("units", 64))
+                num_layers = int(params.get("num_layers", 1))
+                init_str = f"nn.LSTM(input_size={in_features}, hidden_size={hidden_size}, num_layers={num_layers}, batch_first=True, bidirectional=True)"
+                return_sequences = bool(params.get("return_sequences", True))
+                if return_sequences:
+                    custom_forward = f"{var_name}, _ = self.{var_name}({input_arg})"
+                else:
+                    custom_forward = (
+                        f"_, (hn_{var_name}, _) = self.{var_name}({input_arg})\n"
+                        f"        {var_name} = torch.cat((hn_{var_name}[-2], hn_{var_name}[-1]), dim=-1)"
+                    )
+
+            # ── Graph Neural Networks (GCN / SAGE / GAT) ─────────────────────
+            elif op_type == "gcn":
+                in_features = node.input_shape[0][-1] if isinstance(node.input_shape[0], list) else (node.input_shape[-1] if node.input_shape else 64)
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                init_str = f"GCNConv(in_channels={in_features}, out_channels={out_features})"
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_forward = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+                else:
+                    custom_forward = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
+
+            elif op_type == "graph_sage":
+                in_features = node.input_shape[0][-1] if isinstance(node.input_shape[0], list) else (node.input_shape[-1] if node.input_shape else 64)
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                init_str = f"SAGEConv(in_channels={in_features}, out_channels={out_features})"
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_forward = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+                else:
+                    custom_forward = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
+
+            elif op_type == "gat":
+                in_features = node.input_shape[0][-1] if isinstance(node.input_shape[0], list) else (node.input_shape[-1] if node.input_shape else 64)
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                heads = int(params.get("num_heads", 1))
+                init_str = f"GATConv(in_channels={in_features}, out_channels={out_features}, heads={heads})"
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_forward = f"{var_name} = self.{var_name}({parents[0]}, {parents[1]})"
+                else:
+                    custom_forward = f"{var_name} = self.{var_name}({input_arg}, {input_arg})"
 
             # ── Tensor Ops ────────────────────────────────────────────────────
             elif op_type == "add":
@@ -334,6 +414,7 @@ class PyTorchCompiler(BaseGenerator, BaseCompiler):
             forward_steps=forward_steps,
             input_shape_comment=input_shape_comment,
             input_shape_test=input_shape_test,
-            test_input_dims=test_input_dims
+            test_input_dims=test_input_dims,
+            has_gnn=any(n.op_type.lower() in ("gcn", "graph_sage", "gat") for n in sorted_nodes)
         )
         return rendered_code

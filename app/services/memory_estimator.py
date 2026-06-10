@@ -72,12 +72,18 @@ class MemoryEstimator:
                 non_batch_dims_product *= (int(dim) if dim is not None else 1)
             flops = 2 * non_batch_dims_product * in_features * units
 
-        elif node_type in ("batchnorm", "batchnorm2d") and in_shape:
+        out_size_for_mem = out_size
+
+        if node_type in ("batchnorm", "batchnorm2d") and in_shape:
             in_channels = in_shape[1] if in_shape[1] is not None else 3
-            # BatchNorm has 4 parameters per channel (gamma, beta learnable; moving mean, moving var non-learnable)
-            # Standard parameter calculators count learnable as 2 * C
+            # BatchNorm has 2 learnable parameters per channel
             param_count = 2 * in_channels
-            
+            # FLOPs: scaling operations (approx 2 FLOPs per activation element)
+            flops = 2 * out_size
+
+        elif node_type in ("layernorm", "layer_norm") and in_shape:
+            embed_dim = in_shape[-1] if in_shape[-1] is not None else 128
+            param_count = 2 * embed_dim
             # FLOPs: scaling operations (approx 2 FLOPs per activation element)
             flops = 2 * out_size
 
@@ -88,28 +94,35 @@ class MemoryEstimator:
             param_count = vocab_size * embed_dim
             flops = 0  # Table lookup has zero FLOPs
 
+        elif node_type == "positional_encoding" and in_shape:
+            embed_dim = config.get("embed_dim") or config.get("embedding_dim") or (in_shape[2] if len(in_shape) > 2 else 128)
+            max_len = int(config.get("max_len", 1000))
+            param_count = max_len * embed_dim
+            seq_len = in_shape[1] if len(in_shape) > 1 and in_shape[1] is not None else 1
+            flops = seq_len * embed_dim
+
         elif node_type in ("lstm", "gru", "rnn") and in_shape:
             # In shape: [Batch, Seq_Len, Features]
-            in_features = in_shape[2] if in_shape[2] is not None else 64
+            in_features = in_shape[2] if len(in_shape) > 2 and in_shape[2] is not None else 64
             hidden_size = int(config.get("hidden_size") or config.get("units", 64))
-            seq_len = in_shape[1] if in_shape[1] is not None else 1
+            seq_len = in_shape[1] if len(in_shape) > 1 and in_shape[1] is not None else 1
             
             # Gate multiplier (LSTM = 4, GRU = 3, SimpleRNN = 1)
             gate_mult = 4 if node_type == "lstm" else (3 if node_type == "gru" else 1)
             
-            # Param count: gate_mult * (hidden_size * (in_features + hidden_size) + hidden_size)
-            param_count = gate_mult * (hidden_size * (in_features + hidden_size) + hidden_size)
+            # Param count: gate_mult * hidden_size * (in_features + hidden_size)
+            param_count = gate_mult * hidden_size * (in_features + hidden_size)
             
             # FLOPs: 2 * gate_mult * seq_len * (in_features + hidden_size) * hidden_size
             flops = 2 * gate_mult * seq_len * (in_features + hidden_size) * hidden_size
 
-        elif node_type == "bidirectional" and in_shape:
-            in_features = in_shape[2] if in_shape[2] is not None else 64
+        elif node_type in ("bidirectional", "bilstm") and in_shape:
+            in_features = in_shape[2] if len(in_shape) > 2 and in_shape[2] is not None else 64
             hidden_size = int(config.get("hidden_size") or config.get("units", 64))
-            seq_len = in_shape[1] if in_shape[1] is not None else 1
+            seq_len = in_shape[1] if len(in_shape) > 1 and in_shape[1] is not None else 1
             
             # Bidirectional doubles parameters and FLOPs of underlying LSTM
-            param_count = 2 * (4 * (hidden_size * (in_features + hidden_size) + hidden_size))
+            param_count = 2 * (4 * hidden_size * (in_features + hidden_size))
             flops = 2 * (8 * seq_len * (in_features + hidden_size) * hidden_size)
 
         elif node_type in ("maxpool2d", "avgpool", "avgpool2d") and in_shape and out_shape:
@@ -136,7 +149,7 @@ class MemoryEstimator:
             ow = out_shape[3] if out_shape[3] is not None else 1
             flops = 2 * (in_channels * kh * kw) * filters * oh * ow
 
-        elif node_type in ("multiheadattention", "mha") and in_shape:
+        elif node_type in ("multiheadattention", "mha", "attention") and in_shape:
             # Query in_shape: [Batch, Seq_Len, Embed_Dim]
             q_shape = in_shape[0] if isinstance(in_shape[0], list) else in_shape
             embed_dim = config.get("embed_dim") or config.get("key_dim") or config.get("embedding_dim")
@@ -157,11 +170,78 @@ class MemoryEstimator:
             # FLOPs: QK^2 * V self-attention FLOPs is roughly:
             # 2 * seq_len * seq_len * embed_dim (Q * K^T) + 2 * seq_len * seq_len * embed_dim (Softmax * V)
             flops = 4 * seq_len * seq_len * embed_dim
+            # Attention Memory: Heads * T * T
+            out_size_for_mem = out_size + default_batch * num_heads * seq_len * seq_len
+
+        elif node_type in ("transformer_block", "encoder_block") and in_shape:
+            q_shape = in_shape[0] if isinstance(in_shape[0], list) else in_shape
+            embed_dim = config.get("embed_dim") or config.get("embedding_dim")
+            if embed_dim is not None:
+                try:
+                    embed_dim = int(embed_dim)
+                except ValueError:
+                    embed_dim = None
+            if embed_dim is None:
+                embed_dim = q_shape[2] if len(q_shape) > 2 and q_shape[2] is not None else 128
+                
+            num_heads = int(config.get("num_heads", 8))
+            seq_len = q_shape[1] if len(q_shape) > 1 and q_shape[1] is not None else 1
+            
+            # Param count: 12 * D^2
+            param_count = 12 * (embed_dim * embed_dim)
+            # FLOPs: 4 * T^2 * D + 24 * T * D^2
+            flops = 4 * seq_len * seq_len * embed_dim + 24 * seq_len * embed_dim * embed_dim
+            # Attention Memory: Heads * T * T
+            out_size_for_mem = out_size + default_batch * num_heads * seq_len * seq_len
+
+        elif node_type == "decoder_block" and in_shape:
+            q_shape = in_shape[0] if isinstance(in_shape[0], list) and len(in_shape[0]) > 0 else in_shape
+            embed_dim = config.get("embed_dim") or config.get("embedding_dim")
+            if embed_dim is not None:
+                try:
+                    embed_dim = int(embed_dim)
+                except ValueError:
+                    embed_dim = None
+            if embed_dim is None:
+                embed_dim = q_shape[2] if len(q_shape) > 2 and q_shape[2] is not None else 128
+                
+            num_heads = int(config.get("num_heads", 8))
+            seq_len = q_shape[1] if len(q_shape) > 1 and q_shape[1] is not None else 1
+            
+            # Param count: 16 * D^2
+            param_count = 16 * (embed_dim * embed_dim)
+            # FLOPs: 8 * T^2 * D + 32 * T * D^2
+            flops = 8 * seq_len * seq_len * embed_dim + 32 * seq_len * embed_dim * embed_dim
+            # Attention Memory: 2 * Heads * T * T
+            out_size_for_mem = out_size + 2 * (default_batch * num_heads * seq_len * seq_len)
+
+        elif node_type in ("gcn", "graph_sage", "gat") and in_shape:
+            feat_shape = in_shape[0] if isinstance(in_shape[0], list) else in_shape
+            num_nodes = feat_shape[0] if feat_shape and len(feat_shape) > 0 and feat_shape[0] is not None else 100
+            in_features = feat_shape[1] if feat_shape and len(feat_shape) > 1 and feat_shape[1] is not None else 64
+            out_features = int(config.get("out_features") or config.get("units") or config.get("hidden_size") or config.get("features", 64))
+            
+            if node_type == "gcn":
+                # Param count: in_features * out_features
+                param_count = in_features * out_features
+                # FLOPs: 2 * Nodes * Output * (Input + Nodes)
+                flops = 2 * num_nodes * out_features * (in_features + num_nodes)
+            elif node_type == "graph_sage":
+                # Param count: 2 * in_features * out_features
+                param_count = 2 * in_features * out_features
+                # FLOPs: 2 * Nodes * Input * (Nodes + 2 * Output)
+                flops = 2 * num_nodes * in_features * (num_nodes + 2 * out_features)
+            elif node_type == "gat":
+                num_heads = int(config.get("num_heads", 1))
+                # Param count: Heads * Input * Output + Heads * (2 * Output)
+                param_count = num_heads * in_features * out_features + num_heads * (2 * out_features)
+                # FLOPs: 2 * Nodes * Output * (Input + Nodes) * Heads
+                flops = 2 * num_nodes * out_features * (in_features + num_nodes) * num_heads
 
         # General calculations
         # Memory assumes float32 (4 bytes per parameter / element)
         param_memory_mb = (param_count * 4) / (1024 * 1024)
-        activation_memory_mb = (out_size * 4) / (1024 * 1024)
+        activation_memory_mb = (out_size_for_mem * 4) / (1024 * 1024)
 
         return {
             "parameter_count": param_count,

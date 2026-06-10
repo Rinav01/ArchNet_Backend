@@ -86,7 +86,13 @@ class TensorFlowCompiler(BaseGenerator, BaseCompiler):
                 input_arg_str = node_vars[node.inputs[0]]
             else:
                 parents_list = [node_vars[pid] for pid in node.inputs]
-                input_arg_str = "[" + ", ".join(parents_list) + "]"
+                if op_type in (
+                    "multiheadattention", "mha", "attention", "decoder_block", "residual_add", "concatenate",
+                    "add", "subtract", "maximum", "minimum", "multiply"
+                ):
+                    input_arg_str = "[" + ", ".join(parents_list) + "]"
+                else:
+                    input_arg_str = f"layers.Concatenate(axis=1)([{', '.join(parents_list)}])"
 
             # Map operations
             keras_def = "layers.Activation('linear')"
@@ -163,11 +169,17 @@ class TensorFlowCompiler(BaseGenerator, BaseCompiler):
                 embed_dim = int(params.get("embedding_dim") or params.get("output_dim", 128))
                 keras_def = f"layers.Embedding(input_dim={vocab_size}, output_dim={embed_dim})"
 
-            elif op_type == "layernorm":
+            elif op_type == "positional_encoding":
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[2] if node.input_shape and len(node.input_shape) > 2 else 128)
+                max_len = params.get("max_len", 1000)
+                is_custom_call = True
+                custom_call_str = f"pos_indices_{var_name} = tf.range(tf.shape({input_arg_str})[1])[tf.newaxis, :]\n    pos_emb_{var_name} = layers.Embedding(input_dim={max_len}, output_dim={embed_dim})(pos_indices_{var_name})\n    {var_name} = layers.Add()([{input_arg_str}, pos_emb_{var_name}])"
+
+            elif op_type in ("layernorm", "layer_norm"):
                 # Standard layer normalization along last axis
                 keras_def = "layers.LayerNormalization(axis=-1)"
 
-            elif op_type in ("multiheadattention", "mha"):
+            elif op_type in ("multiheadattention", "mha", "attention"):
                 num_heads = int(params.get("num_heads", 8))
                 embed_dim = params.get("embed_dim") or params.get("key_dim") or params.get("embedding_dim")
                 if embed_dim is not None:
@@ -192,6 +204,55 @@ class TensorFlowCompiler(BaseGenerator, BaseCompiler):
                 else:
                     custom_call_str = f"{var_name} = {keras_def}({input_arg_str}, {input_arg_str}, {input_arg_str})"
 
+            elif op_type == "residual_add":
+                keras_def = "layers.Add()"
+
+            elif op_type in ("transformer_block", "encoder_block"):
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[2] if node.input_shape and len(node.input_shape) > 2 else 128)
+                num_heads = int(params.get("num_heads", 8))
+                is_custom_call = True
+                custom_call_str = f"mha_{var_name} = layers.MultiHeadAttention(num_heads={num_heads}, key_dim={embed_dim})({input_arg_str}, {input_arg_str}, {input_arg_str})\n    norm1_{var_name} = layers.LayerNormalization()(layers.Add()([{input_arg_str}, mha_{var_name}]))\n    ffn_{var_name} = layers.Dense({embed_dim} * 4, activation='relu')(norm1_{var_name})\n    ffn_out_{var_name} = layers.Dense({embed_dim})(ffn_{var_name})\n    {var_name} = layers.LayerNormalization()(layers.Add()([norm1_{var_name}, ffn_out_{var_name}]))"
+
+            elif op_type == "decoder_block":
+                embed_dim = params.get("embed_dim") or params.get("embedding_dim") or (node.input_shape[0][2] if node.input_shape and isinstance(node.input_shape[0], list) and len(node.input_shape[0]) > 2 else 128)
+                num_heads = int(params.get("num_heads", 8))
+                is_custom_call = True
+                parents = [node_vars[pid] for pid in node.inputs]
+                target = parents[0] if len(parents) >= 1 else input_arg_str
+                memory = parents[1] if len(parents) >= 2 else target
+                custom_call_str = f"self_attn_{var_name} = layers.MultiHeadAttention(num_heads={num_heads}, key_dim={embed_dim})({target}, {target}, {target})\n    norm1_{var_name} = layers.LayerNormalization()(layers.Add()([{target}, self_attn_{var_name}]))\n    cross_attn_{var_name} = layers.MultiHeadAttention(num_heads={num_heads}, key_dim={embed_dim})(norm1_{var_name}, {memory}, {memory})\n    norm2_{var_name} = layers.LayerNormalization()(layers.Add()([norm1_{var_name}, cross_attn_{var_name}]))\n    ffn_{var_name} = layers.Dense({embed_dim} * 4, activation='relu')(norm2_{var_name})\n    ffn_out_{var_name} = layers.Dense({embed_dim})(ffn_{var_name})\n    {var_name} = layers.LayerNormalization()(layers.Add()([norm2_{var_name}, ffn_out_{var_name}]))"
+
+            elif op_type == "bilstm":
+                units = int(params.get("hidden_size") or params.get("units", 64))
+                return_sequences = bool(params.get("return_sequences", True))
+                keras_def = f"layers.Bidirectional(layers.LSTM(units={units}, return_sequences={return_sequences}))"
+
+            elif op_type == "gcn":
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                is_custom_call = True
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_call_str = f"gcn_linear_{var_name} = layers.Dense(units={out_features})({parents[0]})\n    {var_name} = tf.matmul({parents[1]}, gcn_linear_{var_name})"
+                else:
+                    custom_call_str = f"{var_name} = layers.Dense(units={out_features})({input_arg_str})"
+
+            elif op_type == "graph_sage":
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                is_custom_call = True
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_call_str = f"neigh_{var_name} = tf.matmul({parents[1]}, {parents[0]})\n    gcn_self_{var_name} = layers.Dense(units={out_features})({parents[0]})\n    gcn_neigh_{var_name} = layers.Dense(units={out_features})(neigh_{var_name})\n    {var_name} = layers.Add()([gcn_self_{var_name}, gcn_neigh_{var_name}])"
+                else:
+                    custom_call_str = f"{var_name} = layers.Dense(units={out_features})({input_arg_str})"
+
+            elif op_type == "gat":
+                out_features = int(params.get("out_features") or params.get("units") or params.get("hidden_size") or params.get("features", 64))
+                is_custom_call = True
+                parents = [node_vars[pid] for pid in node.inputs]
+                if len(parents) >= 2:
+                    custom_call_str = f"gat_linear_{var_name} = layers.Dense(units={out_features})({parents[0]})\n    {var_name} = tf.matmul({parents[1]}, gat_linear_{var_name})"
+                else:
+                    custom_call_str = f"{var_name} = layers.Dense(units={out_features})({input_arg_str})"
             elif op_type == "add":
                 keras_def = "layers.Add()"
 

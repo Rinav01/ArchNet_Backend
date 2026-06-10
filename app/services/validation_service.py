@@ -127,16 +127,28 @@ class ValidationService:
             # 0. Incoming Connection Counts Validation
             if edges:
                 parent_count = len(parents)
-                if node_type in ("add", "multiply", "subtract", "maximum", "minimum", "concatenate"):
+                if node_type in ("add", "multiply", "subtract", "maximum", "minimum", "concatenate", "residual_add"):
                     if parent_count < 2:
                         errors.append(
                             f"Merge layer '{node.label}' ({node.type}) requires at least 2 incoming connections. "
                             f"Received: {parent_count}."
                         )
-                elif node_type in ("multiheadattention", "mha"):
+                elif node_type in ("multiheadattention", "mha", "attention"):
                     if parent_count < 1 or parent_count > 3:
                         errors.append(
                             f"Attention layer '{node.label}' ({node.type}) requires between 1 and 3 incoming connections. "
+                            f"Received: {parent_count}."
+                        )
+                elif node_type == "decoder_block":
+                    if parent_count < 1 or parent_count > 2:
+                        errors.append(
+                            f"Decoder block layer '{node.label}' ({node.type}) requires between 1 and 2 incoming connections. "
+                            f"Received: {parent_count}."
+                        )
+                elif node_type in ("gcn", "graph_sage", "gat"):
+                    if parent_count < 1 or parent_count > 2:
+                        errors.append(
+                            f"Graph layer '{node.label}' ({node.type}) requires 1 or 2 incoming connections. "
                             f"Received: {parent_count}."
                         )
                 elif node_type != "input":
@@ -173,7 +185,10 @@ class ValidationService:
                             f"Layer '{node.label}' ({node.type}) requires input tensor with rank >= 2. "
                             f"Received shape: {input_shape} (Rank {rank})."
                         )
-                elif node_type in ("lstm", "gru", "rnn", "bidirectional", "multiheadattention", "mha"):
+                elif node_type in (
+                    "lstm", "gru", "rnn", "bidirectional", "multiheadattention", "mha",
+                    "attention", "positional_encoding", "transformer_block", "encoder_block", "decoder_block", "bilstm"
+                ):
                     if rank != 3:
                         errors.append(
                             f"Layer '{node.label}' ({node.type}) requires a 3D input tensor [Batch, Seq_Len, Features]. "
@@ -185,9 +200,15 @@ class ValidationService:
                             f"Layer '{node.label}' ({node.type}) requires a 2D input tensor of token indexes [Batch, Seq_Len]. "
                             f"Received shape: {input_shape} (Rank {rank})."
                         )
+                elif node_type in ("gcn", "graph_sage", "gat"):
+                    if rank != 2:
+                        errors.append(
+                            f"Layer '{node.label}' ({node.type}) requires a 2D input tensor of node features [Nodes, Features]. "
+                            f"Received shape: {input_shape} (Rank {rank})."
+                        )
 
             # 2. Multi-Head Attention Head Divisibility
-            if node_type in ("multiheadattention", "mha"):
+            if node_type in ("multiheadattention", "mha", "multi_head_attention", "attention"):
                 embed_dim = config.get("embed_dim") or config.get("key_dim") or config.get("embedding_dim")
                 if embed_dim is not None:
                     try:
@@ -257,7 +278,7 @@ class ValidationService:
                                     )
 
             # 4. Illegal Broadcasting for element-wise merges
-            if node_type in ("add", "multiply"):
+            if node_type in ("add", "multiply", "residual_add"):
                 if len(parent_shapes) >= 2:
                     from app.services.shape_inference_service import ShapeInferenceService
                     base_shape = parent_shapes[0]

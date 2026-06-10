@@ -25,6 +25,9 @@ from app.graphql.types.lineage_type import LineageType
 from app.auth.rbac import verify_role_and_ownership
 from app.services.audit_service import AuditService
 from app.models.audit_log import AuditLog
+from app.graphql.types.refactoring_suggestion_type import RefactoringSuggestionType
+from app.graphql.types.registry_types import RegisteredModelType, ModelVersionType
+from app.graphql.types.intelligence_types import DatasetAnalysisReportType, ExperimentAnalysisReportType
 
 @strawberry.type
 class CompilationValidationPayload:
@@ -776,7 +779,246 @@ class Query:
             dataset_version=ver_type
         )
 
+    @strawberry.field
+    def explain_architecture(self, info, project_id: strawberry.ID) -> str:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+            
+        try:
+            from app.services.copilot.copilot_service import CopilotService
+            explanation = CopilotService.explain_architecture(db, proj_uuid)
+            
+            # Log Audit trail
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="EXPLAIN_ARCHITECTURE",
+                resource_type="PROJECT",
+                resource_id=project_id,
+                ip_address=info.context.ip_address
+            )
+            return explanation
+        except Exception as e:
+            raise Exception(str(e))
 
+    @strawberry.field
+    def refactor_architecture(self, info, project_id: strawberry.ID) -> List[RefactoringSuggestionType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+            
+        try:
+            from app.services.copilot.copilot_service import CopilotService
+            suggestions = CopilotService.refactor_architecture(db, proj_uuid)
+            
+            # Log Audit trail
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="REFACTOR_ARCHITECTURE",
+                resource_type="PROJECT",
+                resource_id=project_id,
+                ip_address=info.context.ip_address
+            )
+            
+            from app.graphql.types.refactoring_suggestion_type import RefactorActionType, RefactoringSuggestionType
+            
+            res = []
+            for s in suggestions:
+                act = s.get("action")
+                act_type = None
+                if act:
+                    act_type = RefactorActionType(
+                        type=act["type"],
+                        params=act.get("params")
+                    )
+                res.append(RefactoringSuggestionType(
+                    category=s["category"],
+                    description=s["description"],
+                    action=act_type
+                ))
+            return res
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.field
+    def analyze_dataset(self, info, dataset_id: strawberry.ID) -> DatasetAnalysisReportType:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], dataset_id=dataset_id)
+        db = info.context.db
+        try:
+            ds_uuid = uuid.UUID(dataset_id)
+        except ValueError:
+            raise Exception("Invalid dataset ID format.")
+
+        from app.services.dataset_analysis_service import DatasetAnalysisService
+        res = DatasetAnalysisService.analyze_dataset_report(db, ds_uuid)
+
+        img_stats = None
+        if res.get("image_stats"):
+            img = res["image_stats"]
+            from app.graphql.types.intelligence_types import DatasetImageStatsType
+            img_stats = DatasetImageStatsType(
+                image_count=img["image_count"],
+                classes=img["classes"],
+                class_counts=img["class_counts"],
+                min_resolution=img["min_resolution"],
+                max_resolution=img["max_resolution"],
+                imbalance_ratio=img["imbalance_ratio"],
+                is_imbalanced=img["is_imbalanced"]
+            )
+
+        csv_stats = None
+        if res.get("csv_stats"):
+            csv = res["csv_stats"]
+            from app.graphql.types.intelligence_types import DatasetCSVStatsType
+            csv_stats = DatasetCSVStatsType(
+                missing_values=csv["missing_values"],
+                outliers=csv["outliers"],
+                correlations=csv["correlations"]
+            )
+
+        text_stats = None
+        if res.get("text_stats"):
+            txt = res["text_stats"]
+            from app.graphql.types.intelligence_types import DatasetTextStatsType
+            text_stats = DatasetTextStatsType(
+                vocab_size=txt["vocab_size"],
+                total_tokens=txt["total_tokens"],
+                top_tokens=txt["top_tokens"],
+                min_seq_len=txt["min_seq_len"],
+                max_seq_len=txt["max_seq_len"],
+                mean_seq_len=txt["mean_seq_len"]
+            )
+
+        return DatasetAnalysisReportType(
+            format=res["format"],
+            row_count=res["row_count"],
+            column_count=res["column_count"],
+            image_stats=img_stats,
+            csv_stats=csv_stats,
+            text_stats=text_stats,
+            recommendations=res["recommendations"]
+        )
+
+    @strawberry.field
+    def analyze_experiment(self, info, run_id: strawberry.ID) -> ExperimentAnalysisReportType:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            run_uuid = uuid.UUID(run_id)
+        except ValueError:
+            raise Exception("Invalid training run ID format.")
+
+        from app.models.training_run import TrainingRun
+        run = db.query(TrainingRun).filter(TrainingRun.id == run_uuid).first()
+        if not run:
+            raise Exception("Training run not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(run.project_id))
+
+        from app.services.experiment_analysis_service import ExperimentAnalysisService
+        res = ExperimentAnalysisService.analyze_experiment_run(db, run_uuid)
+
+        return ExperimentAnalysisReportType(
+            fit_type=res["fit_type"],
+            is_stable=res["is_stable"],
+            loss_history=res["loss_history"],
+            accuracy_history=res["accuracy_history"],
+            val_loss_history=res["val_loss_history"],
+            val_accuracy_history=res["val_accuracy_history"],
+            recommendations=res["recommendations"]
+        )
+
+    @strawberry.field
+    def get_model(self, info, model_id: strawberry.ID) -> RegisteredModelType | None:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            model_uuid = uuid.UUID(model_id)
+        except ValueError:
+            raise Exception("Invalid model ID format.")
+
+        from app.models.registered_model import RegisteredModel
+        model = db.query(RegisteredModel).filter(RegisteredModel.id == model_uuid).first()
+        if not model:
+            return None
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(model.project_id))
+
+        return RegisteredModelType(
+            id=model.id,
+            project_id=model.project_id,
+            name=model.name,
+            description=model.description,
+            created_at=model.created_at,
+            updated_at=model.updated_at
+        )
+
+    @strawberry.field
+    def list_versions(self, info, model_id: strawberry.ID) -> List[ModelVersionType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            model_uuid = uuid.UUID(model_id)
+        except ValueError:
+            raise Exception("Invalid model ID format.")
+
+        from app.models.registered_model import RegisteredModel
+        model = db.query(RegisteredModel).filter(RegisteredModel.id == model_uuid).first()
+        if not model:
+            raise Exception("Model not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(model.project_id))
+
+        from app.services.model_registry_service import ModelRegistryService
+        db_versions = ModelRegistryService.list_versions(db, model_uuid)
+
+        return [
+            ModelVersionType(
+                id=v.id,
+                model_id=v.model_id,
+                version=v.version,
+                description=v.description,
+                status=v.status,
+                model_artifact_id=v.model_artifact_id,
+                metrics=v.metrics,
+                config=v.config,
+                compiler_output=v.compiler_output,
+                created_at=v.created_at,
+                updated_at=v.updated_at
+            ) for v in db_versions
+        ]
+
+    @strawberry.field
+    def download_artifact(self, info, version_id: strawberry.ID) -> str:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            ver_uuid = uuid.UUID(version_id)
+        except ValueError:
+            raise Exception("Invalid version ID format.")
+
+        from app.models.model_version import ModelVersion
+        from app.models.registered_model import RegisteredModel
+        mv = db.query(ModelVersion).filter(ModelVersion.id == ver_uuid).first()
+        if not mv:
+            raise Exception("Model version not found.")
+
+        model = db.query(RegisteredModel).filter(RegisteredModel.id == mv.model_id).first()
+        if not model:
+            raise Exception("Registered model not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(model.project_id))
+
+        from app.services.model_registry_service import ModelRegistryService
+        return ModelRegistryService.download_artifact(db, ver_uuid)
 
 @strawberry.type
 class Mutation:
@@ -2514,7 +2756,252 @@ class Mutation:
             updated_at=d_rolled.updated_at
         )
 
+    @strawberry.mutation
+    def generate_architecture(self, info, project_id: strawberry.ID, prompt: str) -> ProjectType:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+            
+        try:
+            from app.services.copilot.copilot_service import CopilotService
+            CopilotService.generate_architecture(db, proj_uuid, prompt)
+            
+            # Re-fetch project
+            from app.models.project import Project
+            project = db.query(Project).filter(Project.id == proj_uuid).first()
+            if not project:
+                raise Exception("Project not found after generation.")
+                
+            # Log Audit trail
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="GENERATE_ARCHITECTURE",
+                resource_type="PROJECT",
+                resource_id=project_id,
+                details={"prompt": prompt},
+                ip_address=info.context.ip_address
+            )
+            
+            return ProjectType(
+                id=project.id,
+                user_id=project.user_id,
+                name=project.name,
+                description=project.description,
+                framework=project.framework,
+                is_public=project.is_public,
+                thumbnail_url=project.thumbnail_url,
+                created_at=project.created_at,
+                updated_at=project.updated_at
+            )
+        except Exception as e:
+            raise Exception(str(e))
 
+    @strawberry.mutation
+    def modify_architecture(self, info, project_id: strawberry.ID, prompt: str) -> ProjectType:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+            
+        try:
+            from app.services.copilot.copilot_service import CopilotService
+            CopilotService.modify_architecture(db, proj_uuid, prompt)
+            
+            # Re-fetch project
+            from app.models.project import Project
+            project = db.query(Project).filter(Project.id == proj_uuid).first()
+            if not project:
+                raise Exception("Project not found after modification.")
+                
+            # Log Audit trail
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="MODIFY_ARCHITECTURE",
+                resource_type="PROJECT",
+                resource_id=project_id,
+                details={"prompt": prompt},
+                ip_address=info.context.ip_address
+            )
+            
+            return ProjectType(
+                id=project.id,
+                user_id=project.user_id,
+                name=project.name,
+                description=project.description,
+                framework=project.framework,
+                is_public=project.is_public,
+                thumbnail_url=project.thumbnail_url,
+                created_at=project.created_at,
+                updated_at=project.updated_at
+            )
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def register_model(
+        self,
+        info,
+        project_id: strawberry.ID,
+        name: str,
+        description: str | None = None
+    ) -> RegisteredModelType:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.services.model_registry_service import ModelRegistryService
+        try:
+            model = ModelRegistryService.register_model(db, proj_uuid, name, description)
+            
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="REGISTER_MODEL",
+                resource_type="REGISTERED_MODEL",
+                resource_id=str(model.id),
+                details={"name": name, "project_id": project_id},
+                ip_address=info.context.ip_address
+            )
+            return RegisteredModelType(
+                id=model.id,
+                project_id=model.project_id,
+                name=model.name,
+                description=model.description,
+                created_at=model.created_at,
+                updated_at=model.updated_at
+            )
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def create_model_version(
+        self,
+        info,
+        model_id: strawberry.ID,
+        version: str,
+        description: str | None = None,
+        artifact_id: strawberry.ID | None = None,
+        metrics: strawberry.scalars.JSON | None = None,
+        config: strawberry.scalars.JSON | None = None,
+        compiler_output: str | None = None
+    ) -> ModelVersionType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            model_uuid = uuid.UUID(model_id)
+            art_uuid = uuid.UUID(artifact_id) if artifact_id else None
+        except ValueError:
+            raise Exception("Invalid UUID format.")
+
+        from app.models.registered_model import RegisteredModel
+        model = db.query(RegisteredModel).filter(RegisteredModel.id == model_uuid).first()
+        if not model:
+            raise Exception("Registered model not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=str(model.project_id))
+
+        from app.services.model_registry_service import ModelRegistryService
+        try:
+            mv = ModelRegistryService.create_version(
+                db=db,
+                model_id=model_uuid,
+                version=version,
+                description=description,
+                artifact_id=art_uuid,
+                metrics=metrics,
+                config=config,
+                compiler_output=compiler_output
+            )
+
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="CREATE_MODEL_VERSION",
+                resource_type="MODEL_VERSION",
+                resource_id=str(mv.id),
+                details={"version": version, "model_id": model_id},
+                ip_address=info.context.ip_address
+            )
+            return ModelVersionType(
+                id=mv.id,
+                model_id=mv.model_id,
+                version=mv.version,
+                description=mv.description,
+                status=mv.status,
+                model_artifact_id=mv.model_artifact_id,
+                metrics=mv.metrics,
+                config=mv.config,
+                compiler_output=mv.compiler_output,
+                created_at=mv.created_at,
+                updated_at=mv.updated_at
+            )
+        except Exception as e:
+            raise Exception(str(e))
+
+    @strawberry.mutation
+    def promote_model_version(
+        self,
+        info,
+        version_id: strawberry.ID,
+        status: str
+    ) -> ModelVersionType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            ver_uuid = uuid.UUID(version_id)
+        except ValueError:
+            raise Exception("Invalid version ID format.")
+
+        from app.models.model_version import ModelVersion
+        from app.models.registered_model import RegisteredModel
+        mv = db.query(ModelVersion).filter(ModelVersion.id == ver_uuid).first()
+        if not mv:
+            raise Exception("Model version not found.")
+
+        model = db.query(RegisteredModel).filter(RegisteredModel.id == mv.model_id).first()
+        if not model:
+            raise Exception("Registered model not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=str(model.project_id))
+
+        from app.services.model_registry_service import ModelRegistryService
+        try:
+            mv_promoted = ModelRegistryService.promote_version(db, ver_uuid, status)
+
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="PROMOTE_MODEL_VERSION",
+                resource_type="MODEL_VERSION",
+                resource_id=str(mv_promoted.id),
+                details={"status": status},
+                ip_address=info.context.ip_address
+            )
+            return ModelVersionType(
+                id=mv_promoted.id,
+                model_id=mv_promoted.model_id,
+                version=mv_promoted.version,
+                description=mv_promoted.description,
+                status=mv_promoted.status,
+                model_artifact_id=mv_promoted.model_artifact_id,
+                metrics=mv_promoted.metrics,
+                config=mv_promoted.config,
+                compiler_output=mv_promoted.compiler_output,
+                created_at=mv_promoted.created_at,
+                updated_at=mv_promoted.updated_at
+            )
+        except Exception as e:
+            raise Exception(str(e))
 
 # Import custom GraphQL security extensions
 from app.graphql.extensions.depth_limiter import GraphQLDepthLimiter

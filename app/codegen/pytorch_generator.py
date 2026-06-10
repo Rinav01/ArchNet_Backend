@@ -8,6 +8,8 @@ from app.ir.ir_graph import IRGraph
 from app.ir.ir_node import IRNode
 from app.codegen.layer_builders import build_layer, clean_variable_name
 
+from app.codegen.generators.pytorch.generator import PyTorchCompiler
+
 class PyTorchGenerator(BaseCompiler):
     """
     Code generator compiling framework-agnostic IRGraph or raw JSON dictionaries
@@ -18,91 +20,8 @@ class PyTorchGenerator(BaseCompiler):
         """
         Compiles the IRGraph into fully runnable PyTorch code.
         """
-        sorted_nodes = ir_graph.get_topologically_sorted_nodes()
-        
-        layers_init = []
-        forward_steps = []
-        
-        input_shape_comment = "unknown"
-        input_shape_test = "[1, 3, 224, 224]"
-        test_input_dims = "1, 3, 224, 224"
-        
-        name_counts: Dict[str, int] = {}
-        node_vars: Dict[str, str] = {}
-        
-        # 1. Map node IDs to clean variable names
-        for node in sorted_nodes:
-            base_var = clean_variable_name(node.label or node.op_type)
-            if base_var in name_counts:
-                name_counts[base_var] += 1
-                var_name = f"{base_var}_{name_counts[base_var]}"
-            else:
-                name_counts[base_var] = 1
-                var_name = base_var
-            node_vars[node.id] = var_name
+        return PyTorchCompiler().compile(ir_graph)
 
-        # 2. Extract shape details for testing inputs from root Input node
-        for node in sorted_nodes:
-            if node.op_type.lower() == "input":
-                shape = node.output_shape
-                if shape:
-                    input_shape_comment = str(shape)
-                    test_dims = [dim if dim is not None else 1 for dim in shape]
-                    input_shape_test = str(test_dims)
-                    test_input_dims = ", ".join(map(str, test_dims))
-
-        # 3. Build each layer using builders
-        for node in sorted_nodes:
-            init_str, forward_str, is_tensor_op, activation = build_layer(
-                op_type=node.op_type,
-                label=node.id,
-                params=node.params or {},
-                input_shape=node.input_shape,
-                inputs=node.inputs,
-                node_vars=node_vars
-            )
-            
-            if not is_tensor_op and init_str:
-                layers_init.append({
-                    "name": node_vars[node.id],
-                    "pytorch_init": init_str
-                })
-                
-            if node.op_type.lower() != "input":
-                forward_steps.append({
-                    "name": node_vars[node.id],
-                    "custom_forward": forward_str,
-                    "shape": str(node.output_shape or "unknown"),
-                    "activation": activation
-                })
-
-        # Load templates
-        template_dir = os.path.join(os.path.dirname(__file__), "templates")
-        env = Environment(loader=FileSystemLoader(template_dir))
-        model_template = env.get_template("model.py.j2")
-        trainer_template = env.get_template("trainer.py.j2")
-
-        # Render Model
-        model_code = model_template.render(
-            project_name=ir_graph.project_name,
-            framework=ir_graph.framework,
-            layers_init=layers_init,
-            forward_steps=forward_steps,
-            input_shape_comment=input_shape_comment,
-            input_shape_test=input_shape_test,
-            test_input_dims=test_input_dims
-        )
-
-        # Render Trainer
-        trainer_code = trainer_template.render(
-            test_input_dims=test_input_dims,
-            input_shape_test=input_shape_test,
-            forward_steps=forward_steps
-        )
-
-        # Combine them beautifully
-        full_code = f"{model_code}\n\n# ==========================================================\n# TRAINING INFRASTRUCTURE\n# ==========================================================\n{trainer_code}"
-        return full_code
 
     def compile_from_dict(self, graph_data: Dict[str, Any], project_name: str = "Project") -> str:
         """

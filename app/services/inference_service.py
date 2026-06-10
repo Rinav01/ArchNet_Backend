@@ -47,7 +47,7 @@ class InferenceService:
             # 2. Instantiate model and load weights
             model = TrainingService.instantiate_model(generated_code)
             if os.path.exists(artifact.artifact_path):
-                model.load_state_dict(torch.load(artifact.artifact_path, map_location="cpu"))
+                model.load_state_dict(torch.load(artifact.artifact_path, map_location="cpu", weights_only=True))
             model.eval()
 
             # 3. Format input tensor

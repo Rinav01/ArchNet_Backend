@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/tests-64%20passed-success?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/tests-135%20passed-success?style=for-the-badge" />
   <img src="https://img.shields.io/badge/FastAPI-0.110+-009688?style=for-the-badge&logo=fastapi" />
   <img src="https://img.shields.io/badge/GraphQL-Strawberry-E10098?style=for-the-badge&logo=graphql" />
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?style=for-the-badge&logo=docker" />
@@ -47,10 +47,11 @@ This repository houses the production-grade, asynchronous FastAPI backend. It co
 
 | Capability | Status | Description |
 |---|---|---|
-| DAG Validation | ✅ | Deterministic topological graph validation |
-| Shape Inference | ✅ | Multi-dimensional symbolic tensor propagation |
-| PyTorch Compilation | ✅ | IRGraph → executable PyTorch generation |
-| TensorFlow Compilation | 🚧 | Multi-framework compiler pipeline |
+| DAG Validation | ✅ | Deterministic topological graph validation supporting Transformers, recurrent networks, and GNNs |
+| Shape Inference | ✅ | Multi-dimensional symbolic tensor propagation (V2 supporting sequence and graph dimensions) |
+| PyTorch Compilation | ✅ | IRGraph → executable PyTorch generation (modularized compiler architecture) |
+| TensorFlow Compilation | ✅ | Fully compliant TensorFlow/Keras code generation supporting custom blocks |
+| JAX/Flax Compilation | ✅ | Advanced JAX/Flax compiler mapping code into functional and stateful layers |
 | CRDT Collaboration | ✅ | Real-time collaborative graph editing |
 | Redis Synchronization | ✅ | Distributed Pub/Sub event orchestration |
 | Sandbox Benchmarking | ✅ | Isolated subprocess performance execution |
@@ -560,9 +561,16 @@ Below are the analytical mathematical formulations utilized by the `MemoryEstima
 | **`MaxPool2D` / `AvgPool`** | $0$ | $B \cdot C_{out} \cdot H_{out} \cdot W_{out} \cdot 4$| $B \cdot C_{in} \cdot (K_h \cdot K_w) \cdot H_{out} \cdot W_{out}$ |
 | **`BatchNorm` / `BatchNorm2D`** | $2 \cdot C_{in}$ (gamma, beta learnable coefficients) | $B \cdot C_{out} \cdot H_{out} \cdot W_{out} \cdot 4$| $2 \cdot B \cdot C_{in} \cdot H_{out} \cdot W_{out}$ (element-wise scale) |
 | **`Embedding`** | $V_{vocab\_size} \cdot D_{embed}$ | $B \cdot T \cdot D_{embed} \cdot 4$ | $0$ (Sparse index table lookup) |
-| **`LSTM` / `GRU` / `RNN`** | $\text{gate\_mult} \cdot (H_{size} \cdot (C_{in} + H_{size}) + H_{size})$ | $B \cdot T \cdot H_{size} \cdot 4$ (assuming sequence return) | $2 \cdot \text{gate\_mult} \cdot B \cdot T \cdot (C_{in} + H_{size}) \cdot H_{size}$ |
-| **`Bidirectional LSTM`** | $2 \cdot (\text{LSTM Parameter Count})$ | $2 \cdot B \cdot T \cdot H_{size} \cdot 4$ | $2 \cdot (\text{LSTM FLOPs Count})$ |
-| **`Multi-Head Attention`**| $4 \cdot (D_{model}^2) + 4 \cdot D_{model}$ | $B \cdot (N_{heads} \cdot T \cdot T + T \cdot D_{model}) \cdot 4$| $4 \cdot B \cdot T^2 \cdot D_{model}$ (Approximate scaled dot product) |
+| **`LSTM` / `GRU` / `RNN`** | $\text{gate\_mult} \cdot H_{size} \cdot (C_{in} + H_{size})$ | $B \cdot T \cdot H_{size} \cdot 4$ (assuming sequence return) | $2 \cdot \text{gate\_mult} \cdot B \cdot T \cdot (C_{in} + H_{size}) \cdot H_{size}$ |
+| **`Bidirectional LSTM / BiLSTM`** | $2 \cdot (\text{LSTM Parameter Count})$ | $2 \cdot B \cdot T \cdot H_{size} \cdot 4$ (assuming sequence return) | $2 \cdot (\text{LSTM FLOPs Count})$ |
+| **`Multi-Head Attention / Attention`**| $4 \cdot D_{model}^2 + 4 \cdot D_{model}$ | $(B \cdot N_{heads} \cdot T \cdot T + B \cdot T \cdot D_{model}) \cdot 4$| $4 \cdot B \cdot T^2 \cdot D_{model}$ (Approximate scaled dot product) |
+| **`Positional Encoding`** | $T_{max} \cdot D_{embed}$ | $B \cdot T \cdot D_{embed} \cdot 4$ | $B \cdot T \cdot D_{embed}$ |
+| **`Residual Add`** | $0$ | $B \cdot D_{embed} \cdot 4$ | $B \cdot D_{embed} \cdot (N_{inputs} - 1)$ |
+| **`Transformer / Encoder Block`** | $12 \cdot D_{model}^2$ | $(B \cdot N_{heads} \cdot T \cdot T + B \cdot T \cdot D_{model}) \cdot 4$ | $4 \cdot B \cdot T^2 \cdot D_{model} + 24 \cdot B \cdot T \cdot D_{model}^2$ |
+| **`Decoder Block`** | $16 \cdot D_{model}^2$ | $(2 \cdot B \cdot N_{heads} \cdot T \cdot T + B \cdot T \cdot D_{model}) \cdot 4$ | $8 \cdot B \cdot T^2 \cdot D_{model} + 32 \cdot B \cdot T \cdot D_{model}^2$ |
+| **`GCN`** | $C_{in} \cdot C_{out}$ | $N_{nodes} \cdot C_{out} \cdot 4$ | $2 \cdot N_{nodes} \cdot C_{out} \cdot (C_{in} + N_{nodes})$ |
+| **`GraphSAGE`** | $2 \cdot C_{in} \cdot C_{out}$ | $N_{nodes} \cdot C_{out} \cdot 4$ | $2 \cdot N_{nodes} \cdot C_{in} \cdot (N_{nodes} + 2 \cdot C_{out})$ |
+| **`GAT`** | $N_{heads} \cdot C_{in} \cdot C_{out} + 2 \cdot N_{heads} \cdot C_{out}$ | $N_{nodes} \cdot C_{out} \cdot 4$ | $2 \cdot N_{nodes} \cdot C_{out} \cdot (C_{in} + N_{nodes}) \cdot N_{heads}$ |
 
 *(Where $B$ is batch size, $T$ is sequence length, $C$ represents channels, $K$ represents kernel dimensions, $H$ and $W$ represent height and width coordinates, $\text{gate\_mult}$ equals $4$ for LSTM, $3$ for GRU, and $1$ for SimpleRNN)*
 
@@ -793,23 +801,33 @@ To run the automated suite testing compilations, broadcasters, sandbox benchmark
 python -m pytest -v
 ```
 
-### Result: **100% Passed (64/64 tests success)**
+### Result: **100% Passed (135 passed, 3 skipped)**
 ```text
-tests\test_advanced_layers.py .....                                      [  7%]
-tests\test_ai_ml_features.py ........                                    [ 20%]
-tests\test_async_and_websockets.py ...                                   [ 25%]
-tests\test_codegen.py .                                                  [ 26%]
-tests\test_collaboration_infrastructure.py ......                        [ 35%]
-tests\test_core_upgrades.py .....                                        [ 43%]
-tests\test_dataset_infrastructure.py ........                            [ 56%]
-tests\test_enterprise_features.py ...                                    [ 60%]
-tests\test_production_infrastructure.py .......                          [ 71%]
-tests\test_security.py ..                                                [ 75%]
-tests\test_shape_upgrades_and_estimator.py ......                        [ 84%]
-tests\test_validation_and_shapes.py ....                                 [ 90%]
-tests\test_validation_upgrades.py ......                                 [100%]
+tests\test_advanced_layers.py ......                                      [  4%]
+tests\test_ai_ml_features.py ........                                    [ 10%]
+tests\test_async_and_websockets.py ...                                   [ 12%]
+tests\test_codegen.py ...                                                [ 14%]
+tests\test_collaboration_infrastructure.py ......                        [ 19%]
+tests/test_compiler_validation.py .....                                  [ 22%]
+tests\test_core_upgrades.py .....                                        [ 26%]
+tests\test_dataset_infrastructure.py ........                            [ 32%]
+tests\test_enterprise_features.py ...                                    [ 34%]
+tests/test_graph_engine.py .....                                         [ 38%]
+tests/test_logging_and_caching.py .....                                  [ 42%]
+tests/test_monitoring.py .....                                           [ 45%]
+tests/test_phase4.py ........                                            [ 51%]
+tests/test_phase5.py ......                                              [ 56%]
+tests/test_phase5_mlops.py ........                                      [ 62%]
+tests/test_phase6_templates.py ............                             [ 71%]
+tests/test_phase6_transformer_shape.py ........                          [ 77%]
+tests\test_production_infrastructure.py .......                          [ 82%]
+tests/test_pytorch_generator.py .....                                    [ 86%]
+tests\test_security.py ..                                                [ 87%]
+tests\test_shape_upgrades_and_estimator.py ......                        [ 92%]
+tests/test_training_engine.py ........                                   [ 97%]
+tests\test_validation_and_shapes.py ....                                 [100%]
 
-====================== 64 passed, 38 warnings in 15.10s =======================
+================== 135 passed, 3 skipped, 71 warnings in 102.40s ==================
 ```
 
 ---
