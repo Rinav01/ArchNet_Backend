@@ -100,6 +100,18 @@ def async_run_training_job(self, training_job_id_str: str):
         }
         db.commit()
 
+        # Trigger workflow automation
+        try:
+            from app.services.workflow_service import WorkflowService
+            WorkflowService.trigger_workflows_for_event(
+                db,
+                event_type="TRAINING_FINISHED",
+                resource_id=job.id,
+                project_id=job.project_id
+            )
+        except Exception as w_err:
+            logger.warning(f"[Workflow Triggers Warning] failed: {w_err}")
+
         # Broadcast completed event
         EventDispatcher.get_redis().publish(
             "mlbuilder:project:training",

@@ -39,7 +39,7 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_payload["exception"] = self.formatException(record.exc_info)
             
-        return json.dumps(log_payload)
+        return json.dumps(log_payload, default=str)
 
 def setup_structured_logging(level: int = logging.INFO):
     """Overrides system root logging handlers to stream structured JSON formatting."""

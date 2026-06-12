@@ -22,6 +22,19 @@ class ModelRegistryService:
         db.add(model)
         db.commit()
         db.refresh(model)
+
+        # Trigger workflow automation
+        try:
+            from app.services.workflow_service import WorkflowService
+            WorkflowService.trigger_workflows_for_event(
+                db,
+                event_type="MODEL_REGISTERED",
+                resource_id=model.id,
+                project_id=model.project_id
+            )
+        except Exception as w_err:
+            print(f"[Workflow Triggers Warning] failed: {w_err}")
+
         return model
 
     @staticmethod
@@ -63,6 +76,22 @@ class ModelRegistryService:
         db.add(mv)
         db.commit()
         db.refresh(mv)
+
+        # Trigger workflow automation
+        try:
+            from app.services.workflow_service import WorkflowService
+            from app.models.registered_model import RegisteredModel
+            reg_model = db.query(RegisteredModel).filter(RegisteredModel.id == mv.model_id).first()
+            if reg_model:
+                WorkflowService.trigger_workflows_for_event(
+                    db,
+                    event_type="MODEL_REGISTERED",
+                    resource_id=mv.id,
+                    project_id=reg_model.project_id
+                )
+        except Exception as w_err:
+            print(f"[Workflow Triggers Warning] failed: {w_err}")
+
         return mv
 
     @staticmethod

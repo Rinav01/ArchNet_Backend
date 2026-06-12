@@ -45,3 +45,20 @@ class ExperimentAnalysisReportType:
     val_loss_history: List[float]
     val_accuracy_history: List[float]
     recommendations: List[str]
+
+@strawberry.type
+class CostEstimateType:
+    training_cost: float
+    inference_cost_per_million: float
+    gpu_hourly_cost: float
+    storage_monthly_cost: float
+    estimated_training_time_hours: float
+    estimated_inference_latency_ms: float
+
+@strawberry.type
+class ExplainabilityReportType:
+    shape_propagation: str
+    attention_scaling: str
+    vram_usage: str
+    parameter_counts: str
+    compiler_decisions: str

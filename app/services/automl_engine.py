@@ -38,6 +38,8 @@ class AutoMLSuggestionEngine:
                     if parent and parent.type.lower() in ("conv2d", "convtranspose2d"):
                         # We have a direct link from Conv2D to Dense! This is a massive parameter bottleneck!
                         in_shape = node.input_shape
+                        if in_shape and isinstance(in_shape[0], list):
+                            in_shape = in_shape[0]
                         if in_shape and len(in_shape) == 4:
                             # e.g. [Batch, 64, 224, 224] going directly to Dense
                             c_in, h_in, w_in = in_shape[1], in_shape[2], in_shape[3]

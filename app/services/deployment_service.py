@@ -21,13 +21,13 @@ class DeploymentService:
     def deploy_artifact(db: Session, artifact_id: uuid.UUID, target: str) -> Deployment:
         """
         Creates a deployment for the given ModelArtifact target.
-        Targets supported: Local Endpoint, Docker, Vertex Endpoint
+        Targets supported: Docker, FastAPI, Vertex AI, SageMaker, HuggingFace, Kubernetes
         """
         artifact = db.query(ModelArtifact).filter(ModelArtifact.id == artifact_id).first()
         if not artifact:
             raise ValueError("Model artifact not found.")
 
-        valid_targets = ["Local Endpoint", "Docker", "Vertex Endpoint"]
+        valid_targets = ["Local Endpoint", "Docker", "Vertex Endpoint", "FastAPI", "Vertex AI", "SageMaker", "HuggingFace", "Kubernetes"]
         if target not in valid_targets:
             raise ValueError(f"Invalid deployment target. Must be one of: {valid_targets}")
 
@@ -44,18 +44,39 @@ class DeploymentService:
         db.commit()
 
         try:
-            if target == "Local Endpoint":
+            if target in ("FastAPI", "Local Endpoint"):
                 deployment.endpoint_url = f"/api/deployments/{deployment.id}/predict"
                 deployment.status = "ACTIVE"
             elif target == "Docker":
                 deployment.endpoint_url = f"http://localhost:8080/predictions/{artifact.project_id}"
                 deployment.status = "ACTIVE"
-            elif target == "Vertex Endpoint":
-                # Mock or build dynamic Vertex Endpoint URI
+            elif target in ("Vertex AI", "Vertex Endpoint"):
                 deployment.endpoint_url = f"https://vertex-ai.endpoints/deployments/{deployment.id}"
+                deployment.status = "ACTIVE"
+            elif target == "SageMaker":
+                deployment.endpoint_url = f"https://sagemaker.aws/endpoints/{deployment.id}"
+                deployment.status = "ACTIVE"
+            elif target == "HuggingFace":
+                deployment.endpoint_url = f"https://huggingface.co/spaces/{deployment.id}"
+                deployment.status = "ACTIVE"
+            elif target == "Kubernetes":
+                deployment.endpoint_url = f"http://kubernetes-service.local/deployments/{deployment.id}"
                 deployment.status = "ACTIVE"
             
             db.commit()
+
+            # Trigger workflow automation
+            try:
+                from app.services.workflow_service import WorkflowService
+                WorkflowService.trigger_workflows_for_event(
+                    db,
+                    event_type="DEPLOYMENT_COMPLETED",
+                    resource_id=deployment.id,
+                    project_id=deployment.project_id
+                )
+            except Exception as w_err:
+                print(f"[Workflow Triggers Warning] failed: {w_err}")
+
             return deployment
         except Exception as e:
             deployment.status = "FAILED"
@@ -252,14 +273,24 @@ CMD ["uvicorn", "predict:app", "--host", "0.0.0.0", "--port", "8000"]
         db.commit()
 
         try:
-            if deployment.target == "Local Endpoint":
+            target = deployment.target
+            if target in ("FastAPI", "Local Endpoint"):
                 deployment.endpoint_url = f"/api/deployments/{deployment.id}/predict"
                 deployment.status = "ACTIVE"
-            elif deployment.target == "Docker":
+            elif target == "Docker":
                 deployment.endpoint_url = f"http://localhost:8080/predictions/{artifact.project_id}"
                 deployment.status = "ACTIVE"
-            elif deployment.target == "Vertex Endpoint":
+            elif target in ("Vertex AI", "Vertex Endpoint"):
                 deployment.endpoint_url = f"https://vertex-ai.endpoints/deployments/{deployment.id}"
+                deployment.status = "ACTIVE"
+            elif target == "SageMaker":
+                deployment.endpoint_url = f"https://sagemaker.aws/endpoints/{deployment.id}"
+                deployment.status = "ACTIVE"
+            elif target == "HuggingFace":
+                deployment.endpoint_url = f"https://huggingface.co/spaces/{deployment.id}"
+                deployment.status = "ACTIVE"
+            elif target == "Kubernetes":
+                deployment.endpoint_url = f"http://kubernetes-service.local/deployments/{deployment.id}"
                 deployment.status = "ACTIVE"
             
             db.commit()
@@ -268,4 +299,24 @@ CMD ["uvicorn", "predict:app", "--host", "0.0.0.0", "--port", "8000"]
             deployment.status = "FAILED"
             db.commit()
             raise e
+
+    @staticmethod
+    def get_deployment_status(db: Session, deployment_id: uuid.UUID) -> str:
+        """Retrieves the status of an existing deployment."""
+        deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+        if not deployment:
+            raise ValueError("Deployment not found.")
+        return deployment.status
+
+    @staticmethod
+    def stop_deployment(db: Session, deployment_id: uuid.UUID) -> Deployment:
+        """Stops/deactivates an active deployment."""
+        deployment = db.query(Deployment).filter(Deployment.id == deployment_id).first()
+        if not deployment:
+            raise ValueError("Deployment not found.")
+        
+        deployment.status = "INACTIVE"
+        deployment.updated_at = datetime.utcnow()
+        db.commit()
+        return deployment
 

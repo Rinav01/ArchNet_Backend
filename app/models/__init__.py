@@ -15,12 +15,14 @@ from app.models.dataset_version import DatasetVersion
 
 from app.models.registered_model import RegisteredModel
 from app.models.model_version import ModelVersion
+from app.models.workflow import Workflow
+from app.models.workflow_run import WorkflowRun
 
 __all__ = [
     "User", "Project", "Node", "Edge", "Dataset", "TrainingJob",
     "AuditLog", "TrainingRun", "ExportArtifact", "ModelArtifact",
     "Deployment", "DeploymentMetrics", "Experiment", "DatasetVersion",
-    "RegisteredModel", "ModelVersion"
+    "RegisteredModel", "ModelVersion", "Workflow", "WorkflowRun"
 ]
 
 

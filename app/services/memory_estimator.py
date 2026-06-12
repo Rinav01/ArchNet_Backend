@@ -22,6 +22,8 @@ class MemoryEstimator:
         
         # Safe shape check helpers
         in_shape = node.input_shape
+        if in_shape and isinstance(in_shape[0], list):
+            in_shape = in_shape[0]
         out_shape = node.output_shape
 
         param_count = 0

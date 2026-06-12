@@ -85,6 +85,18 @@ def async_process_dataset(self, dataset_id_str: str):
         dataset.status = "READY"
         db.commit()
 
+        # Trigger workflow automation
+        try:
+            from app.services.workflow_service import WorkflowService
+            WorkflowService.trigger_workflows_for_event(
+                db,
+                event_type="DATASET_UPLOADED",
+                resource_id=dataset.id,
+                project_id=dataset.project_id
+            )
+        except Exception as w_err:
+            logger.warning(f"[Workflow Triggers Warning] failed: {w_err}")
+
         # Publish finished event over Redis Pub/Sub
         EventDispatcher.get_redis().publish(
             "mlbuilder:project:dataset",

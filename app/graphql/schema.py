@@ -27,7 +27,9 @@ from app.services.audit_service import AuditService
 from app.models.audit_log import AuditLog
 from app.graphql.types.refactoring_suggestion_type import RefactoringSuggestionType
 from app.graphql.types.registry_types import RegisteredModelType, ModelVersionType
-from app.graphql.types.intelligence_types import DatasetAnalysisReportType, ExperimentAnalysisReportType
+from app.graphql.types.intelligence_types import DatasetAnalysisReportType, ExperimentAnalysisReportType, CostEstimateType, ExplainabilityReportType
+from app.graphql.types.workflow_type import WorkflowType
+from app.graphql.types.workflow_run_type import WorkflowRunType
 
 @strawberry.type
 class CompilationValidationPayload:
@@ -1019,6 +1021,124 @@ class Query:
 
         from app.services.model_registry_service import ModelRegistryService
         return ModelRegistryService.download_artifact(db, ver_uuid)
+
+    @strawberry.field
+    def estimate_costs(
+        self,
+        info,
+        project_id: strawberry.ID,
+        dataset_id: strawberry.ID | None = None,
+        epochs: int = 10,
+        gpu_type: str = "T4"
+    ) -> CostEstimateType:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+            ds_uuid = uuid.UUID(dataset_id) if dataset_id else None
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.services.cost_estimator import CostEstimator
+        res = CostEstimator.estimate_costs_for_project(
+            db=db,
+            project_id=proj_uuid,
+            dataset_id=ds_uuid,
+            epochs=epochs,
+            gpu_type=gpu_type
+        )
+        return CostEstimateType(**res)
+
+    @strawberry.field
+    def explain_model(self, info, project_id: strawberry.ID) -> ExplainabilityReportType:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.services.explainability_agent import ExplainabilityAgent
+        res = ExplainabilityAgent.generate_explanation(db, proj_uuid)
+        return ExplainabilityReportType(**res)
+
+    @strawberry.field
+    def get_deployment_status(self, info, deployment_id: strawberry.ID) -> str:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            dep_uuid = uuid.UUID(deployment_id)
+        except ValueError:
+            raise Exception("Invalid deployment ID format.")
+
+        from app.models.deployment import Deployment
+        dep = db.query(Deployment).filter(Deployment.id == dep_uuid).first()
+        if not dep:
+            raise Exception("Deployment not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(dep.project_id))
+
+        from app.services.deployment_service import DeploymentService
+        return DeploymentService.get_deployment_status(db, dep_uuid)
+
+    @strawberry.field
+    def workflows(self, info, project_id: strawberry.ID | None = None) -> List[WorkflowType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        
+        proj_uuid = uuid.UUID(project_id) if project_id else None
+        if proj_uuid:
+            verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(proj_uuid))
+
+        from app.services.workflow_service import WorkflowService
+        db_workflows = WorkflowService.list_workflows(db, proj_uuid)
+
+        return [
+            WorkflowType(
+                id=w.id,
+                project_id=w.project_id,
+                name=w.name,
+                trigger_event=w.trigger_event,
+                action_type=w.action_type,
+                config=w.config,
+                is_active=w.is_active,
+                created_at=w.created_at,
+                updated_at=w.updated_at
+            ) for w in db_workflows
+        ]
+
+    @strawberry.field
+    def workflow_runs(self, info, workflow_id: strawberry.ID) -> List[WorkflowRunType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            wf_uuid = uuid.UUID(workflow_id)
+        except ValueError:
+            raise Exception("Invalid workflow ID format.")
+
+        from app.services.workflow_service import WorkflowService
+        wf = WorkflowService.get_workflow(db, wf_uuid)
+        if not wf:
+            raise Exception("Workflow not found.")
+
+        if wf.project_id:
+            verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=str(wf.project_id))
+
+        from app.models.workflow_run import WorkflowRun
+        db_runs = db.query(WorkflowRun).filter(WorkflowRun.workflow_id == wf_uuid).order_by(WorkflowRun.created_at.desc()).all()
+
+        return [
+            WorkflowRunType(
+                id=r.id,
+                workflow_id=r.workflow_id,
+                status=r.status,
+                trigger_event=r.trigger_event,
+                triggered_by_resource_id=r.triggered_by_resource_id,
+                execution_logs=r.execution_logs,
+                created_at=r.created_at,
+                updated_at=r.updated_at
+            ) for r in db_runs
+        ]
 
 @strawberry.type
 class Mutation:
@@ -3002,6 +3122,124 @@ class Mutation:
             )
         except Exception as e:
             raise Exception(str(e))
+
+    @strawberry.mutation
+    def stop_deployment(self, info, deployment_id: strawberry.ID) -> DeploymentType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            dep_uuid = uuid.UUID(deployment_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.models.deployment import Deployment
+        dep = db.query(Deployment).filter(Deployment.id == dep_uuid).first()
+        if not dep:
+            raise Exception("Deployment not found.")
+
+        verify_role_and_ownership(info, ["admin", "editor"], project_id=str(dep.project_id))
+
+        from app.services.deployment_service import DeploymentService
+        d = DeploymentService.stop_deployment(db, dep_uuid)
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="STOP_DEPLOYMENT",
+            resource_type="DEPLOYMENT",
+            resource_id=str(d.id),
+            ip_address=info.context.ip_address
+        )
+
+        return DeploymentType(
+            id=d.id,
+            project_id=d.project_id,
+            model_artifact_id=d.model_artifact_id,
+            target=d.target,
+            status=d.status,
+            endpoint_url=d.endpoint_url,
+            created_at=d.created_at,
+            updated_at=d.updated_at
+        )
+
+    @strawberry.mutation
+    def create_workflow(
+        self,
+        info,
+        project_id: strawberry.ID | None,
+        name: str,
+        trigger_event: str,
+        action_type: str,
+        config: strawberry.scalars.JSON
+    ) -> WorkflowType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+
+        proj_uuid = uuid.UUID(project_id) if project_id else None
+        if proj_uuid:
+            verify_role_and_ownership(info, ["admin", "editor"], project_id=str(proj_uuid))
+
+        from app.services.workflow_service import WorkflowService
+        w = WorkflowService.create_workflow(
+            db=db,
+            project_id=proj_uuid,
+            name=name,
+            trigger_event=trigger_event,
+            action_type=action_type,
+            config=config
+        )
+
+        AuditService.log_action(
+            db,
+            user_id=user.id,
+            action="CREATE_WORKFLOW",
+            resource_type="WORKFLOW",
+            resource_id=str(w.id),
+            details={"name": name, "trigger_event": trigger_event, "action_type": action_type},
+            ip_address=info.context.ip_address
+        )
+
+        return WorkflowType(
+            id=w.id,
+            project_id=w.project_id,
+            name=w.name,
+            trigger_event=w.trigger_event,
+            action_type=w.action_type,
+            config=w.config,
+            is_active=w.is_active,
+            created_at=w.created_at,
+            updated_at=w.updated_at
+        )
+
+    @strawberry.mutation
+    def delete_workflow(self, info, workflow_id: strawberry.ID) -> bool:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            wf_uuid = uuid.UUID(workflow_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.services.workflow_service import WorkflowService
+        wf = WorkflowService.get_workflow(db, wf_uuid)
+        if not wf:
+            raise Exception("Workflow not found.")
+
+        if wf.project_id:
+            verify_role_and_ownership(info, ["admin", "editor"], project_id=str(wf.project_id))
+
+        success = WorkflowService.delete_workflow(db, wf_uuid)
+        if success:
+            AuditService.log_action(
+                db,
+                user_id=user.id,
+                action="DELETE_WORKFLOW",
+                resource_type="WORKFLOW",
+                resource_id=str(wf_uuid),
+                ip_address=info.context.ip_address
+            )
+
+        return success
 
 # Import custom GraphQL security extensions
 from app.graphql.extensions.depth_limiter import GraphQLDepthLimiter
