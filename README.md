@@ -66,6 +66,24 @@ This repository houses the production-grade, asynchronous FastAPI backend. It co
 | Dockerized Infrastructure | ✅ | Fully containerized deployment stack |
 | Benchmark Metrics | ✅ | FLOPs, latency, throughput, VRAM |
 
+## 🛠️ Workflow Automation
+
+MLBuilder now includes a powerful **Workflow Engine** that enables automated actions triggered by system events such as dataset ingestion, model training, or custom user events.
+
+### Key Features
+- **Event‑Driven Triggers** – Define workflows that run on events like `DATASET_CREATED`, `TRAINING_COMPLETED`, etc.
+- **Persisted Runs** – Each execution creates a `WorkflowRun` record with status, logs, and timestamps.
+- **Extensible Executors** – Custom Python executors can be plugged in via `WorkflowExecutor`.
+- **Dashboard Integration** – View active workflows and recent runs in the admin UI.
+
+### Data Model
+| Model | Fields | Description |
+|---|---|---|
+| `Workflow` | `id`, `name`, `trigger_event`, `is_active`, `project_id?` | Definition of a reusable automation. |
+| `WorkflowRun` | `id`, `workflow_id`, `status`, `trigger_event`, `execution_logs`, `created_at`, `updated_at` | Instance of a workflow execution. |
+
+> **Note:** Workflows are stored in the `workflow` and `workflow_runs` tables and can be managed via GraphQL mutations `createWorkflow`, `triggerWorkflowsForEvent`, etc.
+
 # 🌌 Why MLBuilder Exists
 
 Modern deep learning tooling remains heavily code-centric, difficult to visualize, and fragmented across disconnected ecosystems.

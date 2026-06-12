@@ -30,6 +30,8 @@ from app.graphql.types.registry_types import RegisteredModelType, ModelVersionTy
 from app.graphql.types.intelligence_types import DatasetAnalysisReportType, ExperimentAnalysisReportType, CostEstimateType, ExplainabilityReportType
 from app.graphql.types.workflow_type import WorkflowType
 from app.graphql.types.workflow_run_type import WorkflowRunType
+from app.graphql.types.notebook_type import NotebookCellResultType
+from app.services.notebook_execution_service import NotebookExecutionService
 
 @strawberry.type
 class CompilationValidationPayload:
@@ -937,6 +939,28 @@ class Query:
             val_accuracy_history=res["val_accuracy_history"],
             recommendations=res["recommendations"]
         )
+
+    @strawberry.field
+    def registered_models(self, info, project_id: strawberry.ID) -> List[RegisteredModelType]:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.registered_model import RegisteredModel
+        models = db.query(RegisteredModel).filter(RegisteredModel.project_id == proj_uuid).all()
+        return [
+            RegisteredModelType(
+                id=m.id,
+                project_id=m.project_id,
+                name=m.name,
+                description=m.description,
+                created_at=m.created_at,
+                updated_at=m.updated_at
+            ) for m in models
+        ]
 
     @strawberry.field
     def get_model(self, info, model_id: strawberry.ID) -> RegisteredModelType | None:
@@ -3240,6 +3264,30 @@ class Mutation:
             )
 
         return success
+
+    @strawberry.mutation
+    def execute_notebook_cell(
+        self,
+        info,
+        project_id: strawberry.ID,
+        code: str
+    ) -> NotebookCellResultType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        
+        res = NotebookExecutionService.execute_cell(
+            db=db,
+            user=user,
+            project_id=project_id,
+            code=code,
+            timeout=5
+        )
+        return NotebookCellResultType(
+            success=res["success"],
+            stdout=res["stdout"],
+            stderr=res["stderr"],
+            execution_time_ms=res["execution_time_ms"]
+        )
 
 # Import custom GraphQL security extensions
 from app.graphql.extensions.depth_limiter import GraphQLDepthLimiter
