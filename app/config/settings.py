@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./mlbuilder_local.db"
     
     # Redis URL: local developer Redis fallback
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://127.0.0.1:6379/0"
     
     # AWS Storage Configuration (Optional in Phase 1)
     AWS_ACCESS_KEY_ID: str = ""
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     
     GRAPHQL_DEBUG: bool = True
 
+    # Runtime environment: "development" | "staging" | "production"
+    # Controls dev-only behaviours (auto dev-user, OTel fallback, etc.)
+    ENVIRONMENT: str = "development"
 
     model_config = SettingsConfigDict(
         env_file=".env",

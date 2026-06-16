@@ -80,7 +80,7 @@ app.mount("/exports", StaticFiles(directory=exports_dir), name="exports")
 # Local Storage Fallback Mock Uploader Endpoint
 import os
 import shutil
-from fastapi import File, UploadFile
+from fastapi import File, UploadFile, Request
 
 @app.post("/api/storage/upload/{dataset_id}")
 async def mock_upload_file(dataset_id: str, filename: str, file: UploadFile = File(...)):
@@ -100,6 +100,27 @@ async def mock_upload_file(dataset_id: str, filename: str, file: UploadFile = Fi
         "local_path": file_path,
         "filename": filename
     }
+
+@app.put("/api/storage/upload/{dataset_id}")
+async def mock_upload_file_put(dataset_id: str, filename: str, request: Request):
+    """FastAPI PUT endpoint receiving raw binary streams offline (e.g. from frontend client)
+    and writing them directly to local workspace scratch folders.
+    """
+    workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    storage_dir = os.path.join(workspace_dir, "scratch", "storage", dataset_id)
+    os.makedirs(storage_dir, exist_ok=True)
+    
+    file_path = os.path.join(storage_dir, filename)
+    with open(file_path, "wb") as buffer:
+        async for chunk in request.stream():
+            buffer.write(chunk)
+            
+    return {
+        "status": "success",
+        "local_path": file_path,
+        "filename": filename
+    }
+
 
 # GCP Vertex AI Webhook Callback Endpoint
 import json

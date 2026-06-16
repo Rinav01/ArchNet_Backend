@@ -48,7 +48,7 @@ class DeploymentService:
                 deployment.endpoint_url = f"/api/deployments/{deployment.id}/predict"
                 deployment.status = "ACTIVE"
             elif target == "Docker":
-                deployment.endpoint_url = f"http://localhost:8080/predictions/{artifact.project_id}"
+                deployment.endpoint_url = f"http://127.0.0.1:8080/predictions/{artifact.project_id}"
                 deployment.status = "ACTIVE"
             elif target in ("Vertex AI", "Vertex Endpoint"):
                 deployment.endpoint_url = f"https://vertex-ai.endpoints/deployments/{deployment.id}"
@@ -278,7 +278,7 @@ CMD ["uvicorn", "predict:app", "--host", "0.0.0.0", "--port", "8000"]
                 deployment.endpoint_url = f"/api/deployments/{deployment.id}/predict"
                 deployment.status = "ACTIVE"
             elif target == "Docker":
-                deployment.endpoint_url = f"http://localhost:8080/predictions/{artifact.project_id}"
+                deployment.endpoint_url = f"http://127.0.0.1:8080/predictions/{artifact.project_id}"
                 deployment.status = "ACTIVE"
             elif target in ("Vertex AI", "Vertex Endpoint"):
                 deployment.endpoint_url = f"https://vertex-ai.endpoints/deployments/{deployment.id}"

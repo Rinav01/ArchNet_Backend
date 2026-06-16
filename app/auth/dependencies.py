@@ -3,10 +3,14 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from strawberry.fastapi import BaseContext
 import uuid
+import logging
 
 from app.config.database import get_db
 from app.auth.security import decode_access_token
 from app.models.user import User
+from app.config.settings import settings
+
+logger = logging.getLogger("mlbuilder.auth")
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -36,6 +40,27 @@ def get_current_user(
     token = credentials.credentials
     payload = decode_access_token(token)
     if not payload:
+        # In development mode, treat an invalid/expired token as if no token was
+        # sent — fall through to the dev-user auto-login so the frontend's stale
+        # tokens never block local iteration.
+        if settings.ENVIRONMENT == "development":
+            logger.warning(
+                "JWT decode failed in development mode — falling back to dev user. "
+                "This would return 401 in production."
+            )
+            dev_user = db.query(User).filter(User.username == "developer").first()
+            if not dev_user:
+                dev_user = User(
+                    id=uuid.uuid4(),
+                    email="developer@mlbuilder.local",
+                    username="developer",
+                    password_hash="dev_hash",
+                    role="admin",
+                )
+                db.add(dev_user)
+                db.commit()
+                db.refresh(dev_user)
+            return dev_user
         return None
     
     user_id_str = payload.get("sub")

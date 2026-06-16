@@ -125,11 +125,11 @@ class ModelRegistryService:
 
         if not mv.model_artifact_id:
             # Fallback mockup url for testing
-            return "http://localhost:8000/exports/weights_mock.pt"
+            return "http://127.0.0.1:8000/exports/weights_mock.pt"
 
         artifact = db.query(ModelArtifact).filter(ModelArtifact.id == mv.model_artifact_id).first()
         if not artifact or not artifact.artifact_path:
-            return "http://localhost:8000/exports/weights_mock.pt"
+            return "http://127.0.0.1:8000/exports/weights_mock.pt"
 
         # Generate pre-signed URL using our S3Service helper
         return S3Service.generate_presigned_download_url(artifact.artifact_path)

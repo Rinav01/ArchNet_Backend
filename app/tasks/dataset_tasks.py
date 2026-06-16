@@ -71,6 +71,36 @@ def async_process_dataset(self, dataset_id_str: str):
             s3_client.download_file(bucket_name, s3_key, temp_local_file)
             file_path = temp_local_file
 
+        elif file_path.startswith("gs://"):
+            from google.cloud import storage
+            from google.oauth2 import service_account
+            from urllib.parse import urlparse
+            import json
+
+            parsed_url = urlparse(file_path)
+            bucket_name = parsed_url.netloc
+            blob_name = parsed_url.path.lstrip("/")
+
+            workspace_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+            scratch_temp = os.path.join(workspace_dir, "scratch", "temp")
+            os.makedirs(scratch_temp, exist_ok=True)
+
+            temp_local_file = os.path.join(scratch_temp, f"gcs_temp_{str(dataset_uuid)}_{os.path.basename(file_path)}")
+
+            logger.info(f"Downloading dataset from GCS: {file_path} -> {temp_local_file}")
+            if settings.GCP_CREDENTIALS_JSON:
+                creds_dict = json.loads(settings.GCP_CREDENTIALS_JSON)
+                credentials = service_account.Credentials.from_service_account_info(creds_dict)
+                storage_client = storage.Client(credentials=credentials, project=settings.GCP_PROJECT_ID)
+            else:
+                storage_client = storage.Client()
+
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            blob.download_to_filename(temp_local_file)
+            file_path = temp_local_file
+
+
         # 2. Trigger appropriate parsing engine
         from app.services.dataset_analyzer import DatasetAnalyzer
         analysis = DatasetAnalyzer.analyze_dataset(file_path, dataset.dataset_type)

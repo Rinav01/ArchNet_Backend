@@ -78,7 +78,7 @@ class CloudTrainingService:
                                 "--training_job_id", str(job_id),
                                 "--epochs", str(epochs),
                                 "--dataset_uri", gcs_dataset_uri,
-                                "--webhook_url", "http://localhost:8000/api/training/gcp-webhook"
+                                "--webhook_url", "http://127.0.0.1:8000/api/training/gcp-webhook"
                             ]
                         }
                     }]

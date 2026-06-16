@@ -73,7 +73,7 @@ class S3Service:
                 logger.error(f"Failed to generate AWS S3 pre-signed URL: {e}. Falling back to local uploader.")
 
         # 3. Local Developer Fallback Mock Link (FastAPI route)
-        local_url = f"http://localhost:8000/api/storage/upload/{str(dataset_id)}?filename={filename}"
+        local_url = f"http://127.0.0.1:8000/api/storage/upload/{str(dataset_id)}?filename={filename}"
         logger.info(f"Generated local mock uploader link: {local_url}")
         return local_url
 
@@ -147,5 +147,5 @@ class S3Service:
 
         # Fallback for local files
         filename = os.path.basename(artifact_path)
-        return f"http://localhost:8000/exports/{filename}"
+        return f"http://127.0.0.1:8000/exports/{filename}"
 

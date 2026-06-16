@@ -1203,6 +1203,42 @@ class Mutation:
             raise Exception(str(e))
 
     @strawberry.mutation
+    def update_user_preferences(
+        self,
+        preferences: strawberry.scalars.JSON,
+        info
+    ) -> UserType:
+        user = verify_role_and_ownership(info, ["admin", "editor", "viewer"])
+        db = info.context.db
+        try:
+            from app.models.user import User
+            db_user = db.query(User).filter(User.id == user.id).first()
+            if not db_user:
+                raise Exception("User not found.")
+            
+            current_prefs = db_user.preferences or {}
+            if isinstance(preferences, dict):
+                current_prefs.update(preferences)
+            else:
+                raise Exception("Preferences must be a JSON object.")
+            
+            db_user.preferences = current_prefs
+            db.commit()
+            
+            return UserType(
+                id=db_user.id,
+                email=db_user.email,
+                username=db_user.username,
+                preferences=db_user.preferences or {},
+                role=db_user.role,
+                created_at=db_user.created_at,
+                updated_at=db_user.updated_at
+            )
+        except Exception as e:
+            db.rollback()
+            raise Exception(str(e))
+
+    @strawberry.mutation
     def login(
         self, 
         email: str, 
