@@ -65,6 +65,14 @@ This repository houses the production-grade, asynchronous FastAPI backend. It co
 | WebSocket Collaboration | ✅ | Real-time synchronized editing sessions |
 | Dockerized Infrastructure | ✅ | Fully containerized deployment stack |
 | Benchmark Metrics | ✅ | FLOPs, latency, throughput, VRAM |
+| Interactive Notebooks | ✅ | Isolated, secure execution of Python code cells with dynamic module injection |
+| Model Registry | ✅ | Unified registry tracking model versions, metadata, and stage promotion lifecycle |
+| Explainability Agent | ✅ | Auto-generated detailed Markdown explanations of compiled visual graphs |
+| Provenance Lineage | ✅ | Traceability showing full data lineage from raw dataset to final deployment |
+| Cost & Score Estimator | ✅ | Predicts training/inference costs & scores architectures from A+ to F |
+| PostgreSQL RLS | ✅ | Row-Level Security across 18 database tables for multi-tenant protection |
+| GraphQL Limiters | ✅ | Strict depth (max 4) and complexity cost (max 50) API boundaries |
+
 
 ## 🛠️ Workflow Automation
 
@@ -676,6 +684,112 @@ sequenceDiagram
 ```
 
 
+
+---
+
+## 📓 Interactive Notebook Cell Execution Sandbox
+
+MLBuilder supports direct code cell execution, allowing developers to run custom Python snippets against their dynamically compiled visual neural network.
+
+### Key Features
+- **Sandbox Isolation**: Creates a secure, ephemeral directory for every execution run.
+- **Dynamic Module Injection**: Writes the visual graph as `archnet_module.py` and registers it under the `ArchNetModule` alias, mirroring production module structure.
+- **Process Guarding**: Spawns a sandboxed subprocess with a strict configurable timeout boundary (e.g. 5 seconds) to prevent CPU resource abuse or infinite loops.
+- **Stdout/Stderr Capture**: Aggregates logs, print traces, compilation outputs, error traces, and execution time in milliseconds.
+
+### Cell Execution Lifecycle Flow
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as GraphQL Client
+    participant Resolver as Schema Mutation Resolver
+    participant Service as NotebookExecutionService
+    participant Sandbox as Isolated Subprocess
+    
+    Client->>Resolver: Mutation: executeNotebookCell(projectId, code)
+    Resolver->>Service: execute_cell(db, user, projectId, code, timeout)
+    Service->>Service: Validate project ownership & permissions
+    Service->>Service: Compile project nodes/edges to PyTorch code
+    Service->>Service: Create sandboxed temp directory
+    Service->>Service: Write model script to archnet_module.py
+    Service->>Service: Write cell code to cell_code.py
+    Service->>Sandbox: Spawn python subprocess with cell_code.py (timeout=5s)
+    Sandbox-->>Service: Return stdout, stderr & exit code
+    Service->>Service: Cleanup temp files & workspace
+    Service-->>Resolver: Return execution result metrics
+    Resolver-->>Client: Returns success, stdout, stderr, execution_time_ms
+```
+
+---
+
+## 📦 Model Registry, Versioning, and Lineage Tracking
+
+To transition visually engineered models into production, MLBuilder implements a formal registry tracking performance checkpoints, metadata lineage, and stages progression.
+
+### 1. Model Registry Status & Lifecycle Stages
+A registered model progresses through predefined phases, enabling staging validation before production promotion:
+
+| Model Stage | Logical Meaning | Allowed Actions |
+| :--- | :--- | :--- |
+| **`PENDING`** | Version registered, awaiting initial builds or test telemetry | Promoting to Staging, Deleting |
+| **`STAGING`** | Built successfully. Undergoing unit evaluations or manual testing | Promoting to Production, Rollback to Pending |
+| **`PRODUCTION`** | Serving live API traffic. Set as the default serving endpoint | Rollback to Staging/Pending |
+| **`DEPRECATED`** | Replaced by a newer version. Traffic restricted | Deleting |
+
+### 2. Provenance & Lineage Tracking
+The `LineageService` automatically reconstructs the full ancestry path of a deployment, tracing it back to the exact code iterations and raw data files:
+
+```mermaid
+graph TD
+    subgraph Model Provenance Chain
+        Dataset["Dataset (Metadata & Type)"] -->|has versions| DatasetVersion["Dataset Version (Storage Path & Schema)"]
+        DatasetVersion -->|feeds| TrainingRun["Training Run (Accuracy & Loss)"]
+        TrainingRun -->|generates| ModelArtifact["Model Artifact (.pt Weights File)"]
+        ModelArtifact -->|associates| ModelVersion["Model Version (Staging/Production Status)"]
+        ModelVersion -->|deploys to| Deployment["Deployment Endpoint (FastAPI/Vertex AI/Docker)"]
+        Deployment -->|monitors| DeploymentMetrics["Deployment Metrics (Latency, GPU, Errors)"]
+    end
+```
+
+---
+
+## 🤖 AI-Native Copilot, Scoring, and Cost Estimation
+
+MLBuilder incorporates advanced cognitive support utilities to assist developers in building and evaluating deep learning topologies.
+
+### 1. Copilot Graph Agent
+Exposes natural language graph mutation commands (`generate_architecture`, `modify_architecture`, `refactor_architecture`, and `explain_architecture`). Under the hood, it supports Groq (`llama-3.3-70b-versatile`), Gemini (`gemini-1.5-flash`), and OpenAI (`gpt-4o-mini`) API keys, dynamically falling back to a rule-based mock compiler local agent for testing.
+
+### 2. Multi-dimensional Architecture Scorer
+Estimates model architectural quality from **A+ to F** (0-100 score) based on six weighted metrics:
+- **Depth (15%)**: Assesses capacity and gradient risk constraints.
+- **Parameters Count (15%)**: Measures size footprint.
+- **FLOPs Complexity (15%)**: Checks computational runtime costs.
+- **Memory Footprint (15%)**: Evaluates peak activation sizes.
+- **Gradient Stability (25%)**: Scores presence of Normalization layers, skip connections, and appropriate non-linear activations.
+- **Regularization (15%)**: Validates Dropout layers, batch norms, and optimizer weight decay parameters.
+
+### 3. GPU Cloud Cost Estimator
+Calculates predicted cloud server training run times, storage expenses, and inference costs per million calls across standard hardware configurations based on static layer calculations:
+
+| Compute Target | Hourly Rate ($/hour) | FLOPs/sec Throughput (30% MFU) | Ideal Workload Profile |
+| :---: | :---: | :---: | :--- |
+| **CPU** | $0.05 | 5.0e9 (5 GFLOPs) | Small prototyping, tabular datasets |
+| **T4** | $0.35 | 1.0e11 (100 GFLOPs) | Affordable training runs & stable inference |
+| **V100** | $2.48 | 5.0e11 (500 GFLOPs) | Large legacy CNN networks |
+| **A100** | $3.67 | 2.0e12 (2 TFLOPs) | Multi-layer GNNs & heavy Transformer topologies |
+| **H100** | $4.76 | 1.0e13 (10 TFLOPs) | Cloud-scale training and massive model tuning |
+
+---
+
+## 🔒 Enterprise Row-Level Security (RLS) & API Protection
+
+To support enterprise compliance and prevent multitenant leaks, the database and API expose strict boundaries:
+
+1. **PostgreSQL Row-Level Security (RLS)**: Active across all 18 database tables. While the primary app superuser connection bypasses RLS by default, RLS policies prevent tenant identity leaks at the database level.
+2. **GraphQL API Depth Limiter**: Standard security interceptor rejecting queries nested deeper than **4 layers**.
+3. **GraphQL Cost Limiter**: Assigns static weights to resource-heavy operations (e.g., compile, training) and rejects queries exceeding a total cost threshold of **50**.
+4. **WebSocket Authentication Guards**: Intercepts WS handshakes to verify JWT expiration, project owner authorizations, and presence boundaries, dropping bad connects using customized close codes.
 
 ---
 

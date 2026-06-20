@@ -3321,6 +3321,54 @@ class Mutation:
         return success
 
     @strawberry.mutation
+    def trigger_workflow(self, info, workflow_id: strawberry.ID) -> WorkflowRunType:
+        user = verify_role_and_ownership(info, ["admin", "editor"])
+        db = info.context.db
+        try:
+            wf_uuid = uuid.UUID(workflow_id)
+        except ValueError:
+            raise Exception("Invalid ID format.")
+
+        from app.services.workflow_service import WorkflowService
+        wf = WorkflowService.get_workflow(db, wf_uuid)
+        if not wf:
+            raise Exception("Workflow not found.")
+
+        if wf.project_id:
+            verify_role_and_ownership(info, ["admin", "editor"], project_id=str(wf.project_id))
+
+        from app.models.workflow_run import WorkflowRun
+        from app.services.workflow_executor import WorkflowExecutor
+
+        run = WorkflowRun(
+            id=uuid.uuid4(),
+            workflow_id=wf.id,
+            status="PENDING",
+            trigger_event="MANUAL",
+            triggered_by_resource_id=str(user.id),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+
+        # Run it synchronously
+        WorkflowExecutor.execute_run(db, run.id)
+        db.refresh(run)
+
+        return WorkflowRunType(
+            id=run.id,
+            workflow_id=run.workflow_id,
+            status=run.status,
+            trigger_event=run.trigger_event,
+            triggered_by_resource_id=run.triggered_by_resource_id,
+            execution_logs=run.execution_logs,
+            created_at=run.created_at,
+            updated_at=run.updated_at
+        )
+
+    @strawberry.mutation
     def execute_notebook_cell(
         self,
         info,
