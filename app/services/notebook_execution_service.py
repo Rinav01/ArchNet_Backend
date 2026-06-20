@@ -16,7 +16,7 @@ from app.models.edge import Edge
 
 class NotebookExecutionService:
     @staticmethod
-    def execute_cell(db, user, project_id: str, code: str, timeout: int = 5) -> Dict[str, Any]:
+    def execute_cell(db, user, project_id: str, code: str, timeout: int = 60) -> Dict[str, Any]:
         try:
             proj_uuid = uuid.UUID(project_id)
         except ValueError:
@@ -62,8 +62,8 @@ class NotebookExecutionService:
                 compiler = GeneratorRegistry.get_generator("PyTorch")
                 compiled_module_code = compiler.generate(ir_graph)
                 
-                # Expose MLBuilderModule alias to match notebook mockup imports
-                compiled_module_code += "\n\nMLBuilderModule = GeneratedModel\n"
+                # Expose ArchNetModule alias to match notebook mockup imports
+                compiled_module_code += "\n\nArchNetModule = GeneratedModel\n"
             else:
                 compiled_module_code = (
                     "import torch\n"
@@ -74,7 +74,7 @@ class NotebookExecutionService:
                     "        self.layer = nn.Identity()\n"
                     "    def forward(self, x):\n"
                     "        return self.layer(x)\n\n"
-                    "MLBuilderModule = GeneratedModel\n"
+                    "ArchNetModule = GeneratedModel\n"
                 )
         except Exception as e:
             compiled_module_code = (
@@ -86,12 +86,12 @@ class NotebookExecutionService:
                 "        self.layer = nn.Identity()\n"
                 "    def forward(self, x):\n"
                 "        raise RuntimeError('Model compilation failed: " + str(e).replace("'", "\\'") + "')\n\n"
-                "MLBuilderModule = GeneratedModel\n"
+                "ArchNetModule = GeneratedModel\n"
             )
 
         # 3. Create sandboxed scratch directory
         scratch_dir = tempfile.mkdtemp()
-        module_path = os.path.join(scratch_dir, "mlbuilder_module.py")
+        module_path = os.path.join(scratch_dir, "archnet_module.py")
         cell_path = os.path.join(scratch_dir, "cell_code.py")
 
         try:

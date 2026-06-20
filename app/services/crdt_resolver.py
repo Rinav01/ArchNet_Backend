@@ -201,5 +201,13 @@ class CRDTOperationResolver:
             CachingService.invalidate_project_cache(project_id)
             return {"success": True, "action": action, "payload": payload}
 
+        # 7. CLEAR_PROJECT
+        elif action == "CLEAR_PROJECT":
+            db.query(Edge).filter(Edge.project_id == project_id).delete()
+            db.query(Node).filter(Node.project_id == project_id).delete()
+            db.commit()
+            CachingService.invalidate_project_cache(project_id)
+            return {"success": True, "action": action}
+
         else:
             return {"success": False, "reason": f"Unknown operation action: {action}"}

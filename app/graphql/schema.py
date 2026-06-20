@@ -2511,6 +2511,25 @@ class Mutation:
             raise Exception(str(e))
 
     @strawberry.mutation
+    def clear_project_canvas(self, info, project_id: strawberry.ID) -> bool:
+        user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
+        db = info.context.db
+        try:
+            proj_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise Exception("Invalid project ID format.")
+
+        from app.models.node import Node
+        from app.models.edge import Edge
+        db.query(Edge).filter(Edge.project_id == proj_uuid).delete()
+        db.query(Node).filter(Node.project_id == proj_uuid).delete()
+        db.commit()
+
+        from app.services.caching_service import CachingService
+        CachingService.invalidate_project_cache(proj_uuid)
+        return True
+
+    @strawberry.mutation
     def apply_architecture_template(self, info, project_id: strawberry.ID, prompt: str) -> ProjectType:
         user = verify_role_and_ownership(info, ["admin", "editor"], project_id=project_id)
         db = info.context.db
