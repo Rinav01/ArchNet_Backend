@@ -22,7 +22,12 @@ def get_current_user(
     Automatically authenticates a default developer user in local development mode.
     """
     if not credentials:
-        # Auto-authenticate default developer user in local development mode
+        # In production, an absent token means unauthenticated — return None so
+        # GraphQL resolvers can enforce their own authorization checks (→ 401).
+        if settings.ENVIRONMENT != "development":
+            return None
+
+        # Auto-authenticate default developer user in local development mode only.
         dev_user = db.query(User).filter(User.username == "developer").first()
         if not dev_user:
             dev_user = User(
